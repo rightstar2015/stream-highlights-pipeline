@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Review</title>
+<style>
+:root {
+  --bg: #f6f5f8; --panel: #ffffff; --ink: #1d1b22; --muted: #6b6775; --line: #e2dfe8;
+  --accent: #d6457f; --accent-ink: #ffffff; --ok: #1f8a4c; --warn: #b26a00; --bad: #c0392b;
+  --chip: #f1eef5;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16151a; --panel: #1f1d24; --ink: #ecebf0; --muted: #a29eac; --line: #34313c;
+          --accent: #f06fa8; --accent-ink: #16151a; --ok: #4cc27f; --warn: #e0a040; --bad: #ef6b5b;
+          --chip: #2a2731; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 15px/1.5 "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 20px;
+         background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 18px; margin: 0 12px 0 0; }
+header h1 span { color: var(--accent); }
+nav button { background: none; border: 0; padding: 8px 14px; border-radius: 8px; color: var(--muted);
+             font: inherit; cursor: pointer; }
+nav button.on { background: var(--chip); color: var(--ink); font-weight: 600; }
+.proj { margin-left: auto; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.proj select { max-width: 420px; }
+main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 80px; }
+section { display: none; } section.on { display: block; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: 140px 1fr; gap: 10px 14px; align-items: center; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+label { color: var(--muted); }
+input[type=text], select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font: inherit; }
+textarea { font-family: Consolas, "Microsoft JhengHei", monospace; font-size: 13px; resize: vertical; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > input[type=text] { flex: 1; }
+button.btn { padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+             color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--muted); font-size: 13px; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.steps li { display: flex; gap: 10px; }
+.st-done { color: var(--ok); } .st-fail { color: var(--bad); } .st-start { color: var(--warn); } .st-skip { color: var(--muted); }
+pre.log { max-height: 260px; overflow: auto; background: var(--bg); padding: 10px; border-radius: 8px;
+          font-size: 12px; white-space: pre-wrap; margin: 10px 0 0; }
+.clip { display: grid; grid-template-columns: 28px 1fr 320px; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.clip:first-child { border-top: 0; }
+@media (max-width: 900px) { .clip { grid-template-columns: 28px 1fr; } .clip .media { grid-column: 2; } }
+.clip .fields { display: grid; grid-template-columns: 90px 1fr 1fr; gap: 8px; }
+.clip .fields .wide { grid-column: 1 / -1; }
+.clip img, .clip video { width: 100%; border-radius: 8px; display: block; background: #000; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 99px; background: var(--chip); font-size: 12px; margin-right: 4px; }
+.conf-高 { color: var(--ok); } .conf-低 { color: var(--bad); }
+details summary { cursor: pointer; color: var(--muted); }
+.review-md { white-space: pre-wrap; font-size: 13px; max-height: 360px; overflow: auto; }
+.bar { position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+       padding: 12px 16px; display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.files a { color: var(--accent); text-decoration: none; }
+.files li { margin: 4px 0; }
+.empty { color: var(--muted); padding: 30px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clip <span>Review</span></h1>
+  <nav>
+    <button data-tab="analyze" class="on">1. 分析</button>
+    <button data-tab="review">2. 審核</button>
+    <button data-tab="output">3. 出片</button>
+  </nav>
+  <div class="proj">
+    <select id="recent"><option value="">— 最近的專案 —</option></select>
+    <button class="btn" id="openWork">開啟資料夾…</button>
+  </div>
+</header>
+
+<main>
+<section id="tab-analyze" class="on">
+  <div class="card">
+    <div class="grid">
+      <label>直播檔</label>
+      <div class="row"><input type="text" id="video" placeholder="D:\直播\20260101\直播.mp4"><button class="btn" data-pick="video">選擇…</button></div>
+      <label>YouTube 存檔網址</label>
+      <input type="text" id="url" placeholder="抓聊天室用（可留空）">
+      <label>或聊天室檔</label>
+      <div class="row"><input type="text" id="chat_file" placeholder="已下載的 live_chat.json（可留空）"><button class="btn" data-pick="chat_file">選擇…</button></div>
+      <label>設定檔</label>
+      <div class="row"><input type="text" id="config" placeholder="留空＝自動往上找 config.json（例如 D:\直播\config.json）"><button class="btn" data-pick="config">選擇…</button></div>
+      <label>工作資料夾</label>
+      <div class="row"><input type="text" id="work" placeholder="留空＝直播檔旁邊的 <日期>_精華（例如 20261029_精華）"><button class="btn" data-pick="work" data-kind="dir">選擇…</button></div>
+      <label>只分析一段</label>
+      <div class="row"><input type="text" id="start" placeholder="開始，例如 1:00:00"><input type="text" id="end" placeholder="結束，例如 1:20:00"></div>
+      <label></label>
+      <div>
+        <label><input type="checkbox" id="auto_select" checked> 分析完讓 Claude 挑選（用 Claude Code，不會自動出片）</label><br>
+        <label><input type="checkbox" id="force"> 全部重跑（預設會沿用已完成的步驟）</label>
+      </div>
+    </div>
+    <p style="margin:16px 0 0"><button class="btn primary" id="runAnalyze">開始分析</button>
+      <span class="muted">　6 小時直播約需 30–60 分鐘（轉錄最久），可以關掉頁面，之後從「最近的專案」回來。</span></p>
+  </div>
+  <div class="card" id="jobCard" hidden>
+    <strong id="jobTitle">進度</strong>
+    <ul class="steps" id="steps"></ul>
+    <details><summary>詳細紀錄</summary><pre class="log" id="log"></pre></details>
+  </div>
+</section>
+
+<section id="tab-review">
+  <div class="card" id="reviewHead"><div class="empty">先在「分析」完成一場，或從右上角開啟專案。</div></div>
+  <div class="card" id="clipList" hidden></div>
+  <div class="card" id="candList" hidden></div>
+</section>
+
+<section id="tab-output">
+  <div class="card" id="outJob" hidden>
+    <strong>出片進度</strong>
+    <ul class="steps" id="outSteps"></ul>
+    <details><summary>詳細紀錄</summary><pre class="log" id="outLog"></pre></details>
+  </div>
+  <div class="card"><div id="outFiles"><div class="empty">還沒有成品。</div></div></div>
+</section>
+</main>
+
+<div class="bar" id="renderBar" hidden>
+  <span class="muted" id="selCount"></span>
+  <label><input type="checkbox" id="refine" checked> 先用高品質模型重轉選定段落的字幕（需要 GPU，約數分鐘）</label>
+  <button class="btn primary" id="runRender">輸出勾選的片段</button>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const STEP_NAMES = {pipeline: "整體", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
+  visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
+const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
+let project = null, clips = [], pollTimer = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const fileUrl = p => "/file?path=" + encodeURIComponent(p);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+function parseTs(v) {
+  if (typeof v === "number") return v;
+  return String(v).trim().split(":").reduce((t, p) => t * 60 + parseFloat(p), 0);
+}
+function fmtTs(s) {
+  s = Math.max(0, +s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const ss = (Math.round(sec * 10) / 10).toFixed(sec % 1 ? 1 : 0).padStart(sec % 1 ? 4 : 2, "0");
+  return `${h}:${String(m).padStart(2, "0")}:${ss}`;
+}
+
+// ------------------------------------------------------------- tabs / project
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(t) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
+  $("#renderBar").hidden = t !== "review" || !clips.length;
+}
+
+async function loadRecent() {
+  const s = await api("/api/settings");
+  const sel = $("#recent");
+  sel.length = 1;
+  for (const r of s.recent || []) sel.add(new Option(r.work, r.work));
+}
+$("#recent").onchange = e => e.target.value && openProject(e.target.value);
+$("#openWork").onclick = async () => {
+  const {path} = await api("/api/pick", {kind: "dir"});
+  if (path) openProject(path);
+};
+document.querySelectorAll("[data-pick]").forEach(b => b.onclick = async () => {
+  const {path} = await api("/api/pick", {kind: b.dataset.kind || "file"});
+  if (path) $("#" + b.dataset.pick).value = path;
+});
+
+async function openProject(work, tab = "review") {
+  try { project = await api("/api/project?work=" + encodeURIComponent(work)); }
+  catch (e) { alert(e.message); return; }
+  try { localStorage.setItem("lastWork", project.work); } catch (_) {}
+  if (project.video) $("#video").value = project.video;
+  $("#work").value = project.work;
+  buildClips();
+  renderReview();
+  renderOutputs();
+  loadRecent().then(() => $("#recent").value = project.work);
+  if (tab) showTab(tab);
+}
+
+// ------------------------------------------------------------- analyze
+$("#runAnalyze").onclick = async () => {
+  const body = {};
+  for (const k of ["video", "url", "chat_file", "config", "work", "start", "end"]) body[k] = $("#" + k).value.trim();
+  body.auto_select = $("#auto_select").checked;
+  body.force = $("#force").checked;
+  if (!body.video) return alert("請選擇直播檔");
+  try {
+    const r = await api("/api/analyze", body);
+    $("#work").value = r.work;
+    poll();
+  } catch (e) { alert(e.message); }
+};
+
+function renderSteps(ul, events) {
+  const last = {};
+  for (const e of events) if (e.step !== "pipeline") last[e.step] = e;
+  ul.innerHTML = Object.values(last).map(e => `<li class="st-${e.status}">${ICON[e.status] || ""}
+    <span>${esc(STEP_NAMES[e.step] || e.step)}${e.sec ? `　<span class="muted">${(e.sec / 60).toFixed(1)} 分</span>` : ""}
+    ${e.error ? `<br><span class="muted">${esc(e.error)}</span>` : ""}${e.reason ? `　<span class="muted">${esc(e.reason)}</span>` : ""}</span></li>`).join("");
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  const j = await api("/api/job");
+  if (!j.kind) return;
+  const analyze = j.kind === "analyze";
+  const card = analyze ? $("#jobCard") : $("#outJob");
+  card.hidden = false;
+  renderSteps(analyze ? $("#steps") : $("#outSteps"), j.events);
+  const log = analyze ? $("#log") : $("#outLog");
+  log.textContent = j.log.join("\n");
+  if (analyze) $("#jobTitle").textContent = j.running ? "分析中…" : (j.rc === 0 ? "分析完成" : "分析結束（有步驟失敗，見下方）");
+  $("#runAnalyze").disabled = $("#runRender").disabled = j.running;
+  if (j.running) { pollTimer = setTimeout(poll, 2000); return; }
+  if (j.work && (!project || project.work === j.work || !project.candidates.length)) {
+    await openProject(j.work, analyze && j.rc === 0 ? "review" : (analyze ? null : "output"));
+  }
+}
+
+// ------------------------------------------------------------- review
+function segToLine(s) {
+  if (Array.isArray(s)) return `${fmtTs(parseTs(s[0]))} - ${fmtTs(parseTs(s[1]))}`;
+  return `${fmtTs(parseTs(s.in))} - ${fmtTs(parseTs(s.out))}${s.crop ? " " + s.crop : ""}`;
+}
+function noteToLine(n) { return `${fmtTs(parseTs(n.at))} ${n.text}`; }
+function parseSegs(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*([\d:.]+)\s*[-–~到]\s*([\d:.]+)\s*(\S+)?/);
+    if (m) out.push(m[3] ? {in: m[1], out: m[2], crop: m[3]} : {in: m[1], out: m[2]});
+  }
+  return out;
+}
+function parseNotes(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*([\d:.]+)\s+(.+)$/);
+    if (m) out.push({at: m[1], text: m[2].trim()});
+  }
+  return out;
+}
+
+function buildClips() {
+  clips = [];
+  const src = project.draft || project.selections;
+  for (const c of (src && src.clips) || []) clips.push({...c, on: true, from: project.draft ? "Claude 推薦" : "上次的選擇"});
+}
+function nextId(fmt) {
+  const p = fmt === "vertical" ? "v" : "h";
+  let n = 1;
+  while (clips.some(c => c.id === p + String(n).padStart(2, "0"))) n++;
+  return p + String(n).padStart(2, "0");
+}
+function addCandidate(c, fmt) {
+  const a = Math.max(0, c.peak - (fmt === "vertical" ? 18 : 90)), b = c.peak + (fmt === "vertical" ? 10 : 45);
+  clips.push({id: nextId(fmt), format: fmt, title: `候選 ${c.peak_ts}`, on: true, from: `訊號候選 ${c.id}`,
+              segments: [fmt === "vertical" ? {in: fmtTs(a), out: fmtTs(b), crop: "game"} : [fmtTs(a), fmtTs(b)]],
+              notes: [], peak: c.peak});
+  renderReview();
+}
+
+function clipDuration(c) {
+  return c.segments.reduce((t, s) => t + (parseTs(Array.isArray(s) ? s[1] : s.out) - parseTs(Array.isArray(s) ? s[0] : s.in)), 0);
+}
+
+function renderReview() {
+  const head = $("#reviewHead");
+  if (!project) return;
+  const n = project.candidates.length;
+  head.innerHTML = `<div><strong>${esc(project.work)}</strong></div>
+    <div class="muted">直播檔：${esc(project.video || "（未記錄）")}　設定檔：${esc(project.config || "（預設）")}　訊號候選 ${n} 個　${project.draft ? `Claude 推薦 ${project.draft.clips.length} 支` : "尚未讓 Claude 挑選"}</div>
+    ${project.review ? `<details style="margin-top:8px"><summary>Claude 的候選說明（candidates_review.md）</summary><div class="review-md">${esc(project.review)}</div></details>` : ""}`;
+
+  const list = $("#clipList");
+  list.hidden = !clips.length;
+  list.innerHTML = `<strong>要輸出的片段</strong><div class="muted">時間格式「開始 - 結束 [裁切]」，一行一段（跳剪）。裁切：game／face／game_pip／wide。剪輯指示一行一則「時間 內容」，會變成 Premiere 標記。</div>` +
+    clips.map((c, i) => `
+    <div class="clip" data-i="${i}">
+      <div><input type="checkbox" data-k="on" ${c.on ? "checked" : ""}></div>
+      <div class="fields">
+        <input type="text" data-k="id" value="${esc(c.id)}">
+        <select data-k="format"><option value="vertical" ${c.format === "vertical" ? "selected" : ""}>直式 Shorts</option>
+          <option value="horizontal" ${c.format === "horizontal" ? "selected" : ""}>橫式精華</option></select>
+        <input type="text" data-k="title" value="${esc(c.title)}" placeholder="標題">
+        ${c.format === "vertical" ? `<input class="wide" type="text" data-k="header_title" value="${esc(c.header_title || "")}" placeholder="Shorts 頂部大標題">` : ""}
+        <textarea class="wide" rows="${Math.max(2, c.segments.length)}" data-k="segments">${esc(c.segments.map(segToLine).join("\n"))}</textarea>
+        <textarea class="wide" rows="2" data-k="notes" placeholder="1:02:07 插入驚嚇卡">${esc((c.notes || []).map(noteToLine).join("\n"))}</textarea>
+        <div class="wide muted"><span class="chip">${esc(c.from || "")}</span><span class="chip">${clipDuration(c).toFixed(1)} 秒</span>
+          ${c.confidence ? `<span class="chip conf-${esc(c.confidence)}">信心 ${esc(c.confidence)}</span>` : ""}${esc(c.summary || "")}</div>
+      </div>
+      <div class="media"><div class="pv"></div>
+        <div class="row" style="margin-top:6px"><button class="btn" data-act="preview">預覽</button>
+        <button class="btn" data-act="remove">移除</button></div></div>
+    </div>`).join("");
+
+  list.querySelectorAll(".clip").forEach(el => {
+    const c = clips[+el.dataset.i];
+    el.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
+      const k = inp.dataset.k;
+      if (k === "on") c.on = inp.checked;
+      else if (k === "segments") c.segments = parseSegs(inp.value);
+      else if (k === "notes") c.notes = parseNotes(inp.value);
+      else c[k] = inp.value;
+      if (k === "format" || k === "segments") renderReview();
+      updateCount();
+    });
+    el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); renderReview(); };
+    el.querySelector("[data-act=preview]").onclick = async e => {
+      if (!c.segments.length) return;
+      e.target.disabled = true; e.target.textContent = "產生中…";
+      const ranges = c.segments.map(s => Array.isArray(s) ? [parseTs(s[0]), parseTs(s[1])] : [parseTs(s.in), parseTs(s.out)]);
+      try {
+        const r = await api("/api/preview", {work: project.work, ranges});
+        el.querySelector(".pv").innerHTML = `<video src="${r.url}" controls autoplay></video>`;
+      } catch (err) { alert(err.message); }
+      e.target.disabled = false; e.target.textContent = "預覽";
+    };
+  });
+
+  const cl = $("#candList");
+  cl.hidden = !n;
+  const used = new Set(clips.map(c => c.peak).filter(x => x !== undefined));
+  cl.innerHTML = `<details ${project.draft ? "" : "open"}><summary><strong>訊號候選（依時間）</strong>　加入後可再調整進出點</summary>` +
+    project.candidates.map((c, i) => `
+    <div class="clip">
+      <div></div>
+      <div><strong>${esc(c.peak_ts)}</strong>　<span class="muted">分數 ${c.score}（第 ${c.rank} 名）</span><br>
+        ${Object.entries(c.breakdown).filter(([, v]) => v > 1).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join("")}
+        <div class="row" style="margin-top:8px"><button class="btn" data-add="${i}" data-fmt="vertical" ${used.has(c.peak) ? "disabled" : ""}>＋直式</button>
+          <button class="btn" data-add="${i}" data-fmt="horizontal" ${used.has(c.peak) ? "disabled" : ""}>＋橫式</button></div></div>
+      <div class="media">${c.frame ? `<img loading="lazy" src="${fileUrl(c.frame)}" alt="">` : ""}</div>
+    </div>`).join("") + "</details>";
+  cl.querySelectorAll("[data-add]").forEach(b => b.onclick = () => addCandidate(project.candidates[+b.dataset.add], b.dataset.fmt));
+  updateCount();
+  $("#renderBar").hidden = !$("#tab-review").classList.contains("on") || !clips.length;
+}
+
+function updateCount() {
+  const on = clips.filter(c => c.on);
+  $("#selCount").textContent = `已勾選 ${on.length} 支（直式 ${on.filter(c => c.format === "vertical").length}、橫式 ${on.filter(c => c.format === "horizontal").length}）`;
+}
+
+$("#runRender").onclick = async () => {
+  const chosen = clips.filter(c => c.on && c.segments.length).map(({on, from, peak, ...c}) => c);
+  if (!chosen.length) return alert("沒有勾選任何片段");
+  try {
+    await api("/api/render", {work: project.work, refine: $("#refine").checked, selections: {clips: chosen}});
+    showTab("output");
+    poll();
+  } catch (e) { alert(e.message); }
+};
+
+// ------------------------------------------------------------- outputs
+function renderOutputs() {
+  const files = [...project.clips, ...project.xml];
+  const box = $("#outFiles");
+  if (!files.length) { box.innerHTML = `<div class="empty">還沒有成品。</div>`; return; }
+  box.innerHTML = `<div class="row" style="justify-content:space-between"><strong>成品</strong>
+      <button class="btn" id="openFolder">開啟資料夾</button></div>
+    <ul class="files">${files.map(f => `<li><a href="${fileUrl(f)}" target="_blank">${esc(f.split(/[\\/]/).pop())}</a></li>`).join("")}</ul>
+    <p class="muted">Premiere：檔案 &gt; 匯入 XML；字幕 .srt 拖到序列成為字幕軌。</p>`;
+  $("#openFolder").onclick = () => api("/api/open", {path: files[0]});
+}
+
+// ------------------------------------------------------------- start
+(async () => {
+  await loadRecent();
+  let last = null;
+  try { last = localStorage.getItem("lastWork"); } catch (_) {}
+  const j = await api("/api/job");
+  if (j.running) { if (j.work) await openProject(j.work, null); showTab(j.kind === "analyze" ? "analyze" : "output"); poll(); }
+  else if (last) openProject(last, null);
+})();
+</script>
+</body>
+</html>

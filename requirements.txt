@@ -1,0 +1,5 @@
+faster-whisper
+opencc-python-reimplemented
+numpy
+yt-dlp
+jieba

@@ -1,0 +1,22 @@
+tests/_out/
+_eval/
+__pycache__/
+*.pyc
+.claude/
+
+# personal settings and client notes (see README)
+config.json
+config_*.json
+references/client_style.md
+references/local_notes.md
+*.local.*
+
+# media and project files
+*.mp4
+*.mkv
+*.mov
+*.flv
+*.wav
+*.live_chat.json
+*_精華/
+*.zip
