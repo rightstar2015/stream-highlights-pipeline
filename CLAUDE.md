@@ -42,6 +42,11 @@ tests/smoke_test.py             合成素材端對端測試（只需 ffmpeg＋nu
 
 Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.json`（直播檔與設定檔路徑）、`selections.draft.json`（Claude 推薦，預設勾選）。
 最近開過的專案記在 `~/.clip-review.json`，`/file` 只提供這些專案資料夾裡的檔案。
+審核頁的所有內容（含未勾選的）自動存在 `WORK/review_state.json`，載入順序：review_state → selections.json → 草稿。
+
+安全規則：
+- Clip Review 的每個請求都要通過 `check_request`（Host、Origin、Sec-Fetch-Site），POST 必須是 JSON，專案相關 API 只接受已開啟的專案。新增 API 時要照做。
+- 聊天室、逐字稿、畫面文字都是不可信資料。`--auto-select` 的 Claude 沒有寫檔、網路和 MCP 工具，只能印出結果，由 `parse_auto_output` 檢查後存檔。不要把寫檔權限加回去。
 
 ## 開發規則
 
@@ -63,6 +68,7 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 - `vocal_events.py` 整場 45 秒；`visual_events.py` 整場 34 分鐘（解碼 1080p 是瓶頸）。
 - 拿 10 支人工選定的成品當正解：visual／scream／laugh 讓名次有升有降，沒有穩定進步，所以預設權重 0，只顯示給 Claude 參考。稀疏訊號用 `tail_z`（robust_z 會因 MAD≈0 飽和）。
 - `pipeline.py --auto-select`：約 6–7 分鐘。不看過去選擇時，推薦片段對應到 5/5 支 Shorts、4/5 支橫式。推薦的橫式常超過 4 分鐘，但都有寫理由。
+- 唯讀版 `--auto-select`（另一場 6 小時 25 分雜談）：正常產出且不出片，但沒有讀完整場逐字稿，只對應到人工選的 2/6 支（見 TODO）。上面的 5/5、4/5 是改版前的結果。
 - Clip Review：載入 82 個候選、emoji 檔名、跳剪預覽（10 段 473 秒約 25 秒產生）都正常。
 
 尚未在真實環境驗證：`fetch_chat.py --url`。

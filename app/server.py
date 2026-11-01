@@ -4,6 +4,10 @@ Usage: python app/server.py [--port 8765] [--no-browser]     (or double-click st
 
 Standard library only. Binds to 127.0.0.1. One background job (analysis or render) at a time;
 the page polls /api/job for progress. All the real work is done by scripts/*.py.
+
+Websites open in the same browser can send requests to localhost, so every request has to pass
+check_request (Host / Origin / Fetch Metadata), POST bodies must be application/json, and
+project-specific endpoints only accept folders that are already known projects.
 """
 import argparse
 import json
@@ -27,6 +31,8 @@ from common import default_workdir, find_config, fmt_ts, load_json, save_json, w
 PY = sys.executable
 SETTINGS = Path.home() / ".clip-review.json"
 ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+REVIEW_STATE = "review_state.json"  # every clip on the review page, checked or not, with unsaved edits
+PROJECT_MARKERS = ("candidates.json", "studio.json", "selections.json")
 
 
 def settings():
@@ -118,7 +124,11 @@ def project_state(work):
     cands = load_json(paths["candidates"])["candidates"] if paths["candidates"].exists() else []
     for c in cands:
         c["frame"] = frame_for(paths, c["peak"])
+    state_file = paths["dir"] / REVIEW_STATE
     out = {
+        "review_state": load_json(state_file) if state_file.exists() else None,
+        "draft_newer": (paths["draft"].exists() and state_file.exists()
+                        and paths["draft"].stat().st_mtime > state_file.stat().st_mtime),
         "work": str(paths["dir"].resolve()),
         "video": meta.get("video"),
         "config": meta.get("config"),
@@ -172,6 +182,12 @@ def allowed_file(path):
     return any(p == r or r in p.parents for r in roots) and p.is_file()
 
 
+def known_project(work):
+    """A folder the user already opened or analysed in this app."""
+    p = Path(work).resolve()
+    return any(p == Path(r["work"]).resolve() for r in settings().get("recent", []))
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
@@ -186,6 +202,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        super().end_headers()
+
+    def check_request(self, path):
+        """Refuse requests that other websites could make through the user's browser.
+        Host stops DNS rebinding, Origin stops cross-site POSTs, Fetch Metadata stops cross-site GETs.
+        The page itself may be linked from elsewhere; it holds no data."""
+        port = self.server.server_address[1]
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if self.headers.get("Host") not in hosts:
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in {f"http://{h}" for h in hosts}:
+            return False
+        if path in ("/", "/index.html"):
+            return True
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
@@ -193,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if not self.check_request(u.path):
+            return self.send_json({"error": "拒絕來自其他網站的請求"}, 403)
         if u.path in ("/", "/index.html"):
             return self.send_file(APP / "static" / "index.html")
         if u.path == "/api/settings":
@@ -202,6 +240,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/project":
             if not q.get("work") or not Path(q["work"]).exists():
                 return self.send_json({"error": "找不到工作資料夾"}, 404)
+            if not any((Path(q["work"]) / m).exists() for m in PROJECT_MARKERS):
+                return self.send_json({"error": "這個資料夾不是專案（沒有分析資料）"}, 400)
             state = project_state(q["work"])
             remember(state["work"], state["video"])  # also lets /file serve its frames and clips
             return self.send_json(state)
@@ -214,22 +254,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if not self.check_request(u.path):
+            return self.send_json({"error": "拒絕來自其他網站的請求"}, 403)
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+            return self.send_json({"error": "只接受 application/json"}, 415)
         try:
             data = self.body()
             handler = {"/api/analyze": self.analyze, "/api/render": self.render,
                        "/api/preview": self.preview, "/api/pick": self.pick,
-                       "/api/open": self.open_path}.get(u.path)
+                       "/api/open": self.open_path, "/api/review_state": self.review_state}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
+            if u.path in ("/api/render", "/api/preview", "/api/review_state") and not known_project(data.get("work", "")):
+                return self.send_json({"error": "不是已開啟的專案"}, 403)
             return handler(data)
         except Exception as e:  # report to the page instead of dropping the connection
             return self.send_json({"error": str(e)}, 500)
 
     def analyze(self, d):
         video = Path(d["video"]).resolve()
-        if not video.exists():
+        if not video.is_file():
             return self.send_json({"error": f"找不到直播檔：{video}"}, 400)
         work = Path(d.get("work") or default_workdir(video)).resolve()
+        if work.parent == work:
+            return self.send_json({"error": "工作資料夾不能是磁碟根目錄"}, 400)
         paths = work_paths(work)
         # resolve the config here too, so the render step uses the same one as the analysis
         meta = {"video": str(video), "config": d.get("config") or find_config(work, video.parent)}
@@ -254,7 +302,11 @@ class Handler(BaseHTTPRequestHandler):
         paths = work_paths(work)
         meta = studio_meta(paths)
         sel = d["selections"]
-        sel["source"] = sel.get("source") or meta.get("video")
+        # the source comes from the project, never from the request
+        previous = load_json(paths["selections"]).get("source") if paths["selections"].exists() else None
+        sel["source"] = meta.get("video") or previous
+        if not sel["source"]:
+            return self.send_json({"error": "這個專案沒有記錄直播檔路徑"}, 400)
         if not sel["clips"]:
             return self.send_json({"error": "沒有勾選任何片段"}, 400)
         save_json(sel, paths["selections"])
@@ -278,12 +330,19 @@ class Handler(BaseHTTPRequestHandler):
         out = make_preview(d["work"], meta["video"], ranges)
         self.send_json({"url": "/file?path=" + quote(out)})
 
+    def review_state(self, d):
+        if not isinstance(d.get("clips"), list):
+            return self.send_json({"error": "clips 格式不正確"}, 400)
+        save_json({"clips": d["clips"]}, work_paths(d["work"])["dir"] / REVIEW_STATE)
+        self.send_json({"ok": True})
+
     def pick(self, d):
         self.send_json({"path": pick_path(d.get("kind", "file"))})
 
     def open_path(self, d):
-        p = Path(d["path"])
-        os.startfile(str(p if p.is_dir() else p.parent))  # Windows only, like the rest of the workflow
+        if not allowed_file(d.get("path", "")):
+            return self.send_json({"error": "不允許的檔案"}, 403)
+        os.startfile(str(Path(d["path"]).resolve().parent))  # folders only; Windows only, like the rest of the workflow
         self.send_json({"ok": True})
 
     def send_file(self, p):
