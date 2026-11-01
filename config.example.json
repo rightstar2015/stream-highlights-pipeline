@@ -73,6 +73,9 @@
     ]
   },
 
+  "_limits_說明": "validate_selections.py 的建議長度（秒），超出只會提醒，不會擋下出片。",
+  "limits": {"vertical_sec": [18, 35], "horizontal_sec": [120, 240]},
+
   "subtitles": {
     "vertical_max_chars": 10,
     "horizontal_max_chars": 12,
