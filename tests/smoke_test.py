@@ -227,6 +227,24 @@ def main():
                                     result({"clips": [dict(good, segments=[[20, 10]])]}))),
           "自動挑選：不合格的結果都不會存檔")
 
+    from pipeline import coverage_warning
+    tm = """## 話題地圖
+- [0:00:00–1:00:00] 開場
+- [1:00:00–5:50:00] 雜談
+
+## 候選
+- [5:59:00–6:00:00] 不算地圖
+"""
+    check(coverage_warning(tm, 6 * 3600) is None, "話題地圖：涵蓋整場時不警告")
+    check("只涵蓋" in coverage_warning(tm.replace("5:50:00", "2:00:00"), 6 * 3600), "話題地圖：沒讀到結尾會警告")
+    gap = """## 話題地圖
+- [0:00:00–1:00:00] a
+- [3:00:00–6:00:00] b
+"""
+    check("空白" in coverage_warning(gap, 6 * 3600),
+          "話題地圖：中間大段空白會警告")
+    check("沒有話題地圖" in coverage_warning("# 候選", 6 * 3600), "話題地圖：沒有地圖會警告")
+
     sel = {"source": str(video), "clips": [
         {"id": "v01", "format": "vertical", "title": "打王暴斃", "header_title": "我破防了",
          "segments": [{"in": "1:37.7", "out": "1:44", "crop": "game_pip"},
