@@ -3,9 +3,10 @@
 Usage:
   python pipeline.py --video STREAM.mp4 [--url YOUTUBE_URL | --chat-file live_chat.json]
                      [--workdir WORK] [--config config.json] [--start 1:00:00 --end 1:20:00]
-                     [--model large-v3-turbo] [--no-separate] [--force] [--auto-select]
+                     [--model large-v3-turbo] [--no-separate] [--visual] [--force] [--auto-select]
 
-Steps: transcribe / chat / audio / visual run in parallel, then vocal -> signals -> frames.
+Steps: transcribe / chat / audio run in parallel, then vocal -> signals -> frames.
+The slow visual step only runs with --visual or a non-zero signals.weights.visual in the config.
 A step whose output already exists is skipped (--force reruns everything), and a failed step is
 logged and the rest carry on (e.g. no chat replay). Each step's output goes to WORK/logs/<step>.log.
 
@@ -29,7 +30,8 @@ import time
 from pathlib import Path
 
 from common import (SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
-                    parse_ts, save_json, work_paths)
+                    parse_ts, probe, save_json, work_paths)
+from validate_selections import validate
 
 SCRIPTS = SKILL_DIR / "scripts"
 PY = sys.executable
@@ -229,10 +231,11 @@ def auto_select(args, paths, log):
                                 config=args.config or "（無，使用預設）", lines=lines)
     # prompt goes in on stdin: --add-dir / --tools / --allowedTools take several values and would swallow it.
     # --tools removes every other tool (no writing, no web, no MCP); dontAsk denies anything not allowed.
+    # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside this folder and WORK.
     cmd = [claude, "-p", "--permission-mode", "dontAsk", "--strict-mcp-config",
            "--add-dir", str(paths["dir"].resolve()),
            "--tools", "Read,Glob,Grep,Bash",
-           "--allowedTools", "Read,Glob,Grep,Bash(python scripts/frames.py:*)"]
+           "--allowedTools", "Bash(python scripts/frames.py:*)"]
     emit(log, "auto_select", "start")
     t0 = time.time()
     with open(paths["dir"] / "logs" / "auto_select.log", "w", encoding="utf-8") as f:
@@ -252,12 +255,23 @@ def auto_select(args, paths, log):
             save_json(draft, paths["draft"])
             segs = load_json(paths["transcript_json"])["segments"] if paths["transcript_json"].exists() else []
             warning = coverage_warning(review, segs[-1]["end"] if segs else 0)
+            issues = validate(draft["clips"], load_config(args.config), probe(args.video)["duration"], segs)
+            if issues:
+                note = f"推薦片段有 {len(issues)} 項提醒，請在審核時確認"
+                warning = f"{warning}；{note}" if warning else note
         except ValueError as e:
             err["error"] = f"Claude 的結果沒通過檢查，沒有存檔：{e}（完整內容在 logs/auto_select.log）"
     ok = not err
     extra = {**err, **({"reason": warning} if warning else {})}
     emit(log, "auto_select", "done" if ok else "fail", sec=round(time.time() - t0, 1), **extra)
     return ok
+
+
+def fingerprint(video, args):
+    """What the analysis was made from; changing any of it makes existing outputs stale."""
+    st = Path(video).stat()
+    return {"video": str(video), "size": st.st_size, "mtime": int(st.st_mtime),
+            "start": args.start, "end": args.end}
 
 
 def main():
@@ -272,6 +286,7 @@ def main():
     ap.add_argument("--end")
     ap.add_argument("--model", default="large-v3-turbo", help="整場掃描用的轉錄模型")
     ap.add_argument("--no-separate", action="store_true", help="不做人聲分離")
+    ap.add_argument("--visual", action="store_true", help="也跑畫面分析（6 小時直播約 30 分鐘，預設權重 0）")
     ap.add_argument("--frames", type=int, default=20, help="候選截圖張數")
     ap.add_argument("--force", action="store_true", help="全部重跑")
     ap.add_argument("--auto-select", action="store_true", help="分析完讓 Claude 挑選（不出片）")
@@ -284,12 +299,21 @@ def main():
     work = Path(args.workdir) if args.workdir else default_workdir(video)
     if not args.config:
         args.config = find_config(work, video.parent)
-    load_config(args.config)  # fail early on a broken config
+    config = load_config(args.config)  # fail early on a broken config
     paths = work_paths(work)
     logdir = paths["dir"] / "logs"
     logdir.mkdir(exist_ok=True)
     log = paths["pipeline_log"]
     emit(log, "pipeline", "start", workdir=str(paths["dir"].resolve()), config=args.config)
+
+    meta_path = paths["dir"] / "analysis_meta.json"
+    current = fingerprint(video, args)
+    if meta_path.exists() and load_json(meta_path) != current and not args.force:
+        msg = "直播檔或分析範圍跟上次不同，現有的分析結果可能過期。確定要換請加 --force 全部重跑，或改用新的工作資料夾"
+        emit(log, "check", "fail", error=msg)
+        emit(log, "pipeline", "done", failed=["check"], workdir=str(paths["dir"].resolve()))
+        sys.exit(2)
+    save_json(current, meta_path)
 
     base = ["--workdir", str(paths["dir"])]
     cfg = ["--config", args.config] if args.config else []
@@ -306,12 +330,16 @@ def main():
         chat = [PY, "fetch_chat.py", "--url", args.url, *base]
         if args.cookies_from_browser:
             chat += ["--cookies-from-browser", args.cookies_from_browser]
+    run_visual = args.visual or config["signals"]["weights"].get("visual", 0) > 0
     failed = run_group([
         Step("transcribe", tr, paths["transcript_json"]),
         Step("chat", chat, paths["chat"]) if chat else None,
-        Step("audio", [PY, "audio_energy.py", "--video", args.video, *base], paths["audio"]),
-        Step("visual", [PY, "visual_events.py", "--video", args.video, *base, *cfg, *rng], paths["visual"]),
+        Step("audio", [PY, "audio_energy.py", "--video", args.video, *base, *rng], paths["audio"]),
+        Step("visual", [PY, "visual_events.py", "--video", args.video, *base, *cfg, *rng], paths["visual"])
+        if run_visual else None,
     ], args, log, logdir)
+    if not run_visual:
+        emit(log, "visual", "skip", reason="預設跳過，要跑請加 --visual")
     if not chat:
         emit(log, "chat", "skip", reason="沒有提供 --url 或 --chat-file")
     failed += run_group([Step("vocal", [PY, "vocal_events.py", *base, "--video", args.video, *rng],

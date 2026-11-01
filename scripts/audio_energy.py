@@ -1,6 +1,6 @@
 """Per-second loudness of the stream audio -> audio_energy.csv (t, rms_db).
 
-Usage: python audio_energy.py --video STREAM.mp4 --workdir WORK
+Usage: python audio_energy.py --video STREAM.mp4 --workdir WORK [--start 0] [--end SECONDS]
 Streams decoded audio through ffmpeg so memory stays small even for 6h streams.
 """
 import argparse
@@ -8,7 +8,7 @@ import subprocess
 
 import numpy as np
 
-from common import need_tool, work_paths
+from common import need_tool, parse_ts, work_paths
 
 SR = 8000  # loudness only; low rate keeps it fast
 
@@ -17,15 +17,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
     ap.add_argument("--workdir", required=True)
+    ap.add_argument("--start", default=None, help="只分析某段，秒數或 HH:MM:SS")
+    ap.add_argument("--end", default=None)
     args = ap.parse_args()
     need_tool("ffmpeg")
     paths = work_paths(args.workdir)
 
-    cmd = ["ffmpeg", "-v", "error", "-i", args.video, "-vn", "-ac", "1", "-ar", str(SR),
-           "-f", "s16le", "-"]
+    start = int(parse_ts(args.start)) if args.start else 0
+    cmd = ["ffmpeg", "-v", "error"]
+    if start:
+        cmd += ["-ss", str(start)]
+    cmd += ["-i", args.video]
+    if args.end:
+        cmd += ["-t", f"{parse_ts(args.end) - start:.3f}"]
+    cmd += ["-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     chunk = SR * 2  # bytes per second (int16)
-    rows, t, buf = [], 0, b""
+    rows, t, buf = [], start, b""
     while True:
         data = proc.stdout.read(chunk * 60)
         if not data:

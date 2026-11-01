@@ -32,6 +32,7 @@ scripts/
   export_premiere_xml.py        FCP7 XML（xmeml v4）給 Premiere 匯入，notes → 序列標記；處理 emoji 檔名
   avatar_tracks.py              依 Premiere 匯出 XML 的字卡軌，產生說話者頭像片段
   analyze_reference.py          分析過去成品（長度、換畫面節奏、響度、直式內容視窗、縮圖表）
+  validate_selections.py        選片檢查（時間、裁切、長度、切在句子中間）；snap_range 對齊句子邊界
   setup_check.py                環境檢查
 app/server.py                   Clip Review：本機網頁介面（只用標準函式庫，綁 127.0.0.1）
 app/static/index.html           單頁前端（分析／審核／出片）
@@ -42,11 +43,12 @@ tests/smoke_test.py             合成素材端對端測試（只需 ffmpeg＋nu
 
 Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.json`（直播檔與設定檔路徑）、`selections.draft.json`（Claude 推薦，預設勾選）。
 最近開過的專案記在 `~/.clip-review.json`，`/file` 只提供這些專案資料夾裡的檔案。
+分析結果的來源記在 `WORK/analysis_meta.json`（直播檔大小、修改時間、範圍），不同就拒絕沿用，除非加 `--force`。畫面分析預設不跑（`--visual` 或權重大於 0 才跑）。
 審核頁的所有內容（含未勾選的）自動存在 `WORK/review_state.json`，載入順序：review_state → selections.json → 草稿。
 
 安全規則：
 - Clip Review 的每個請求都要通過 `check_request`（Host、Origin、Sec-Fetch-Site），POST 必須是 JSON，專案相關 API 只接受已開啟的專案。新增 API 時要照做。
-- 聊天室、逐字稿、畫面文字都是不可信資料。`--auto-select` 的 Claude 沒有寫檔、網路和 MCP 工具，只能印出結果，由 `parse_auto_output` 檢查後存檔。不要把寫檔權限加回去。
+- 聊天室、逐字稿、畫面文字都是不可信資料。`--auto-select` 的 Claude 沒有寫檔、網路和 MCP 工具，也只能讀專案和工作資料夾（Read 等工具刻意不列進 `--allowedTools`），結果由 `parse_auto_output` 檢查後存檔。不要把這些權限加回去。
 
 ## 開發規則
 

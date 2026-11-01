@@ -42,7 +42,7 @@ description: 從 YouTube Vtuber 直播錄影檔剪出精華：轉錄（台灣中
 python scripts/pipeline.py --video 直播.mp4 --url <YouTube網址>
 ```
 （`--config` 不給就自動往上找 `config.json`，開頭會印出用的是哪一個。）
-會平行跑轉錄（有 torch／demucs 就自動 `--separate`）、聊天室、音量、畫面變化，再跑尖叫／笑聲、合併訊號、候選截圖。已完成的步驟會跳過（`--force` 全部重跑），某步失敗會記錄並繼續；每步紀錄在 `WORK/logs/`。工作資料夾預設是直播檔旁邊的 `<日期>_精華/`。跑完直接進第 3 步（`frames.py --candidates` 也已經跑過）。
+會平行跑轉錄（有 torch／demucs 就自動 `--separate`）、聊天室、音量，再跑尖叫／笑聲、合併訊號、候選截圖。畫面分析預設跳過，要跑加 `--visual`。已完成的步驟會跳過（`--force` 全部重跑）；直播檔或分析範圍跟上次不同時會停下來提醒，不沿用舊結果。某步失敗會記錄並繼續；每步紀錄在 `WORK/logs/`。工作資料夾預設是直播檔旁邊的 `<日期>_精華/`。跑完直接進第 3 步（`frames.py --candidates` 也已經跑過）。
 
 使用者也可以用圖形介面 Clip Review（雙擊 `start_clip_review.bat`）做分析、勾選、出片；那時候 Claude 只負責挑選（見第 3 步的無人在線模式）。
 
@@ -106,7 +106,7 @@ python scripts/signals.py --workdir WORK --config config.json
 
 ## 4. 輸出
 
-依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數）。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
+依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數），寫完先跑 `python scripts/validate_selections.py --workdir WORK --config config.json` 檢查；剪點切在句子中間時可加 `--snap` 對齊，再讀一次確認。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
 ```
 python scripts/refine_transcript.py --workdir WORK --config config.json
 ```

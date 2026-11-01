@@ -9,6 +9,7 @@ Needs only ffmpeg + numpy (no whisper, no network). Checks:
 """
 import json
 import shutil
+import time
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -136,7 +137,7 @@ def main():
     W2.mkdir()
     shutil.copy(W / "transcript.json", W2 / "transcript.json")
     out = sh("pipeline.py", "--video", video, "--workdir", W2, "--chat-file", OUT / "chat.live_chat.json",
-             "--no-separate", "--frames", "3")
+             "--no-separate", "--frames", "3", "--visual")
     ev = [json.loads(l[3:]) for l in out.splitlines() if l.startswith("@@ ")]
     st = {e["step"]: e["status"] for e in ev}
     check(st.get("transcribe") == "skip" and all(st.get(s) == "done" for s in
@@ -147,6 +148,19 @@ def main():
     st = {json.loads(l[3:])["step"]: json.loads(l[3:])["status"] for l in out.splitlines() if l.startswith("@@ ")}
     check(all(st.get(s) == "skip" for s in ("transcribe", "audio", "visual", "vocal")) and st["signals"] == "done",
           "pipeline：重跑時沿用已完成的步驟")
+    r = subprocess.run([PY, "pipeline.py", "--video", str(video), "--workdir", str(W2), "--no-separate", "--start", "0:10"],
+                       cwd=SCRIPTS, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(r.returncode == 2 and "可能過期" in r.stdout, "pipeline：分析範圍改變時提醒，不沿用舊結果")
+
+    W3 = OUT / "range"
+    W3.mkdir()
+    shutil.copy(W / "transcript.json", W3 / "transcript.json")
+    out = sh("pipeline.py", "--video", video, "--workdir", W3, "--no-separate", "--frames", "1",
+             "--start", "1:00", "--end", "1:20")
+    st = {json.loads(l[3:])["step"]: json.loads(l[3:]) for l in out.splitlines() if l.startswith("@@ ")}
+    rows = np.genfromtxt(W3 / "audio_energy.csv", delimiter=",", names=True)
+    check(st["visual"]["status"] == "skip" and not (W3 / "visual_events.csv").exists(), "pipeline：預設跳過畫面分析")
+    check(rows["t"][0] == 60 and len(rows) == 20, "音量分析遵守 --start/--end")
 
     # Clip Review server: project state + byte ranges (video seeking), on a throwaway port/settings file
     sys.path.insert(0, str(HERE.parent / "app"))
@@ -194,6 +208,29 @@ def main():
     check(status("/api/review_state", state, Origin=base) == 200, "Clip Review：接受自己頁面的請求")
     st = json.loads(urllib.request.urlopen(f"{base}/api/project?work={quote(str(W2))}").read())
     check(st["review_state"]["clips"][0]["title"] == "我改過的", "Clip Review：審核內容重新開啟後還在")
+
+    # background job: stop kills the whole process tree, refine-style steps fall back and carry on
+    slow = [PY, "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"]
+    fail = [PY, "-c", "raise SystemExit(3)"]
+    def wait_job():
+        for _ in range(100):
+            if not studio.JOB.snapshot()["running"]:
+                return studio.JOB.snapshot()
+            time.sleep(0.1)
+        raise SystemExit("FAIL: 工作沒有結束")
+    check(studio.JOB.start("render", str(W2), [("慢", slow)]), "工作：可以啟動")
+    time.sleep(1)
+    check(status("/api/stop", {}) == 200 and wait_job()["rc"] == -1, "工作：可以停止")
+    studio.JOB.start("render", str(W2), [("重轉", fail, [fail]), ("出片", [PY, "-c", "print('ok')"])])
+    j = wait_job()
+    check(j["rc"] == 0 and any(e["step"] == "出片" and e["status"] == "done" for e in j["events"])
+          and any(e["step"] == "重轉" and e.get("reason") for e in j["events"]), "工作：重轉失敗會提醒，但仍繼續出片")
+    studio.JOB.start("render", str(W2), [("失敗", fail)])
+    check(wait_job()["rc"] == 3, "工作：一般步驟失敗就停止")
+    studio.save_json({"recent": studio.settings()["recent"],
+                      "last_job": {"running": True, "kind": "analyze", "work": str(W2), "events": [], "log": []}}, studio.SETTINGS)
+    studio.JOB.restore()
+    check(studio.JOB.snapshot()["interrupted"], "工作：重開伺服器後會顯示上次沒做完")
     srv.shutdown()
 
     # headless picks: Claude's printed result is validated before anything is written
@@ -226,6 +263,25 @@ def main():
                                     result({"clips": [good, good]}),
                                     result({"clips": [dict(good, segments=[[20, 10]])]}))),
           "自動挑選：不合格的結果都不會存檔")
+
+    from validate_selections import snap_range, validate
+    words = [{"start": 10 + i * 0.5, "end": 10.4 + i * 0.5, "word": "字"} for i in range(40)]
+    sent = [{"start": 10.0, "end": 29.9, "text": "長句", "words": words}]
+    check(np.allclose(snap_range(11.1, 29.0, sent), (9.8, 30.1)), "對齊句子：靠近句子邊界就吸過去")
+    a, b = snap_range(20.2, 25.1, sent)
+    check(abs(a - 19.95) < 0.01 and abs(b - 25.45) < 0.01, "對齊句子：離邊界遠時只避開切到字")
+    check(snap_range(5, 40, sent) == (5, 40), "對齊句子：不在句子內就不動")
+    vcfg = {"limits": {"vertical_sec": [18, 35]}, "vertical_layout": {"crop_presets": {"game": [0, 0, 1, 1]}}}
+    base_clip = {"id": "v01", "format": "vertical", "segments": [{"in": 40, "out": 60, "crop": "game"}]}
+    levels = lambda *c, **k: [(i["level"], i["msg"]) for i in validate(list(c), vcfg, **k)]
+    check(levels(base_clip, duration=100) == [], "選片檢查：正常的片段沒有提醒")
+    check(levels(base_clip, duration=50)[0][0] == "error", "選片檢查：超出直播長度是錯誤")
+    check(levels(dict(base_clip, segments=[{"in": 60, "out": 40}]))[0][0] == "error", "選片檢查：進點大於出點是錯誤")
+    check(levels(dict(base_clip, segments=[{"in": 40, "out": 60, "crop": "faec"}]))[0][0] == "error", "選片檢查：裁切不存在是錯誤")
+    check(levels(base_clip, base_clip)[0][0] == "error", "選片檢查：id 重複是錯誤")
+    check(levels(dict(base_clip, segments=[{"in": 0, "out": 50}]))[0][0] == "warning", "選片檢查：太長只是提醒")
+    check(any("句子中間" in m for _, m in [(i["level"], i["msg"]) for i in
+              validate([dict(base_clip, segments=[{"in": 15, "out": 40}])], vcfg, segs=sent)]), "選片檢查：切在句子中間會提醒")
 
     from pipeline import coverage_warning
     tm = """## 話題地圖

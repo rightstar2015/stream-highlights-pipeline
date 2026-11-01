@@ -26,7 +26,10 @@ APP = Path(__file__).resolve().parent
 SKILL = APP.parent
 SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from common import default_workdir, find_config, fmt_ts, load_json, save_json, work_paths  # noqa: E402
+from common import (default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
+                    probe, save_json, work_paths)
+from cut_clips import safe_name  # noqa: E402
+from validate_selections import snap_clip, validate  # noqa: E402
 
 PY = sys.executable
 SETTINGS = Path.home() / ".clip-review.json"
@@ -56,46 +59,93 @@ class Job:
         self.lock = threading.Lock()
         self.kind, self.running, self.rc = None, False, None
         self.events, self.log, self.work = [], [], None
+        self.proc, self.stopping, self.interrupted = None, False, False
 
     def snapshot(self):
         with self.lock:
             return {"kind": self.kind, "running": self.running, "rc": self.rc, "work": self.work,
-                    "events": self.events[-50:], "log": self.log[-80:]}
+                    "interrupted": self.interrupted, "events": self.events[-50:], "log": self.log[-80:]}
+
+    def persist(self):
+        """Keep the last job in the settings file, so a restart can report one that never finished."""
+        s = settings()
+        s["last_job"] = self.snapshot()
+        save_json(s, SETTINGS)
+
+    def restore(self):
+        last = settings().get("last_job")
+        if last and last.get("running"):
+            self.kind, self.work, self.events, self.log = last["kind"], last["work"], last["events"], last["log"]
+            self.rc, self.interrupted = -2, True
+
+    def stop(self):
+        """Stop the running job and everything it started (ffmpeg, whisper, claude...)."""
+        with self.lock:
+            if not self.running or not self.proc:
+                return False
+            self.stopping = True
+            pid = self.proc.pid
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+        else:
+            self.proc.kill()
+        return True
 
     def start(self, kind, work, cmds):
-        """cmds: list of (label, argv); run in order, stop at the first failure."""
+        """cmds: list of (label, argv) or (label, argv, fallback). Run in order and stop at the first
+        failure. fallback: a list of argv to try next; when all fail, the job goes on with a warning."""
         with self.lock:
             if self.running:
                 return False
             self.kind, self.running, self.rc, self.work = kind, True, None, work
-            self.events, self.log = [], []
+            self.events, self.log, self.stopping, self.interrupted = [], [], False, False
+        self.persist()
         threading.Thread(target=self._run, args=(cmds,), daemon=True).start()
         return True
 
     def _run(self, cmds):
         rc = 0
-        for label, argv in cmds:
+        for cmd in cmds:
+            label, argv = cmd[0], cmd[1]
+            fallbacks = cmd[2] if len(cmd) > 2 else None
             if label:
                 self._event({"step": label, "status": "start"})
-            p = subprocess.Popen(argv, cwd=SCRIPTS, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, encoding="utf-8", errors="replace", env=ENV)
-            for line in p.stdout:
-                line = line.rstrip()
-                if line.startswith("@@ "):
-                    try:
-                        self._event(json.loads(line[3:]))
-                        continue
-                    except ValueError:
-                        pass
+            rc = self._exec(argv)
+            for alt in fallbacks or []:
+                if rc == 0 or self.stopping:
+                    break
                 with self.lock:
-                    self.log.append(line)
-            rc = p.wait()
+                    self.log.append(f"[{label}] 失敗，改用備用方式重試")
+                rc = self._exec(alt)
+            if rc != 0 and fallbacks is not None and not self.stopping:
+                self._event({"step": label, "status": "fail", "reason": "沒有成功，沿用原本的逐字稿繼續；字幕可能較不準"})
+                rc = 0
+                continue
             if label:
                 self._event({"step": label, "status": "done" if rc == 0 else "fail"})
             if rc != 0:
                 break
         with self.lock:
-            self.running, self.rc = False, rc
+            self.running, self.proc = False, None
+            self.rc = -1 if self.stopping else rc
+        self.persist()
+
+    def _exec(self, argv):
+        p = subprocess.Popen(argv, cwd=SCRIPTS, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding="utf-8", errors="replace", env=ENV)
+        with self.lock:
+            self.proc = p
+        for line in p.stdout:
+            line = line.rstrip()
+            if line.startswith("@@ "):
+                try:
+                    self._event(json.loads(line[3:]))
+                    continue
+                except ValueError:
+                    pass
+            with self.lock:
+                self.log.append(line)
+        return p.wait()
 
     def _event(self, e):
         with self.lock:
@@ -141,7 +191,35 @@ def project_state(work):
     if paths["clips"].exists():
         out["clips"] = sorted(str(p) for p in paths["clips"].iterdir() if p.suffix in (".mp4", ".srt"))
     out["xml"] = [str(p) for p in paths["dir"].glob("*_premiere.xml")]
+    wanted = {Path(f"{c['id']}_{safe_name(c.get('title'))}.mp4").stem for c in (out["selections"] or {}).get("clips", [])}
+    out["stale_clips"] = [Path(f).name for f in out["clips"] if out["selections"] and Path(f).stem not in wanted]
     return out
+
+
+TRANSCRIPTS = {}  # work folder -> (modified times, sentences), since these files can be several MB
+
+
+def transcript_for(paths):
+    files = (paths["transcript_json"], paths["refined_json"])
+    stamp = tuple(f.stat().st_mtime if f.exists() else 0 for f in files)
+    key = str(paths["dir"])
+    if TRANSCRIPTS.get(key, (None,))[0] != stamp:
+        TRANSCRIPTS[key] = (stamp, load_best_transcript(paths))
+    return TRANSCRIPTS[key][1]
+
+
+def video_duration(paths, meta):
+    """Length of the project's stream, or None when it can't be read."""
+    try:
+        return probe(project_source(paths, meta))["duration"]
+    except (TypeError, RuntimeError, SystemExit):
+        return None
+
+
+def project_source(paths, meta):
+    """The stream comes from the project, never from a request."""
+    previous = load_json(paths["selections"]).get("source") if paths["selections"].exists() else None
+    return meta.get("video") or previous
 
 
 def make_preview(work, video, ranges):
@@ -262,10 +340,12 @@ class Handler(BaseHTTPRequestHandler):
             data = self.body()
             handler = {"/api/analyze": self.analyze, "/api/render": self.render,
                        "/api/preview": self.preview, "/api/pick": self.pick,
-                       "/api/open": self.open_path, "/api/review_state": self.review_state}.get(u.path)
+                       "/api/open": self.open_path, "/api/review_state": self.review_state,
+                       "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
-            if u.path in ("/api/render", "/api/preview", "/api/review_state") and not known_project(data.get("work", "")):
+            if (u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap")
+                    and not known_project(data.get("work", ""))):
                 return self.send_json({"error": "不是已開啟的專案"}, 403)
             return handler(data)
         except Exception as e:  # report to the page instead of dropping the connection
@@ -293,6 +373,8 @@ class Handler(BaseHTTPRequestHandler):
             argv.append("--auto-select")
         if d.get("force"):
             argv.append("--force")
+        if d.get("visual"):
+            argv.append("--visual")
         if not JOB.start("analyze", str(work), [(None, argv)]):
             return self.send_json({"error": "已有工作在執行中"}, 409)
         self.send_json({"ok": True, "work": str(work)})
@@ -302,19 +384,25 @@ class Handler(BaseHTTPRequestHandler):
         paths = work_paths(work)
         meta = studio_meta(paths)
         sel = d["selections"]
-        # the source comes from the project, never from the request
-        previous = load_json(paths["selections"]).get("source") if paths["selections"].exists() else None
-        sel["source"] = meta.get("video") or previous
+        sel["source"] = project_source(paths, meta)
         if not sel["source"]:
             return self.send_json({"error": "這個專案沒有記錄直播檔路徑"}, 400)
         if not sel["clips"]:
             return self.send_json({"error": "沒有勾選任何片段"}, 400)
+        only = [str(x) for x in d.get("only") or []]
+        cfg_data = load_config(meta.get("config"))
+        blocked = [i for i in validate(sel["clips"], cfg_data, video_duration(paths, meta))
+                   if i["level"] == "error" and (not only or i["id"] in only)]
+        if blocked:
+            return self.send_json({"error": "；".join(f"{i['id']}：{i['msg']}" for i in blocked)}, 400)
         save_json(sel, paths["selections"])
         cfg = ["--config", meta["config"]] if meta.get("config") else []
+        pick = ["--only", *only] if only else []
         cmds = []
         if d.get("refine"):
-            cmds.append(("高品質重轉字幕", [PY, "refine_transcript.py", "--workdir", work, *cfg]))
-        cmds += [("輸出影片與字幕", [PY, "cut_clips.py", "--workdir", work, *cfg]),
+            refine = [PY, "refine_transcript.py", "--workdir", work, *cfg, *pick]
+            cmds.append(("高品質重轉字幕", refine, [[*refine, "--no-separate"]]))
+        cmds += [("輸出影片與字幕", [PY, "cut_clips.py", "--workdir", work, *cfg, *pick]),
                  ("Premiere XML", [PY, "export_premiere_xml.py", "--workdir", work])]
         if not JOB.start("render", work, cmds):
             return self.send_json({"error": "已有工作在執行中"}, 409)
@@ -329,6 +417,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "進出點不正確"}, 400)
         out = make_preview(d["work"], meta["video"], ranges)
         self.send_json({"url": "/file?path=" + quote(out)})
+
+    def validate(self, d):
+        paths = work_paths(d["work"])
+        meta = studio_meta(paths)
+        issues = validate(d["clips"], load_config(meta.get("config")), video_duration(paths, meta),
+                          transcript_for(paths))
+        self.send_json({"issues": issues})
+
+    def snap(self, d):
+        paths = work_paths(d["work"])
+        meta = studio_meta(paths)
+        self.send_json({"segments": snap_clip(d["clip"], transcript_for(paths), video_duration(paths, meta))})
+
+    def stop(self, d):
+        self.send_json({"ok": JOB.stop()})
 
     def review_state(self, d):
         if not isinstance(d.get("clips"), list):
@@ -386,6 +489,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
+    JOB.restore()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"Clip Review 已啟動：{url}（關閉這個視窗即停止）")

@@ -84,7 +84,9 @@ D:\直播\
 | 3. 出片 | 你按按鈕，之後自動 | 重轉字幕，輸出 MP4、SRT、Premiere XML |
 | 4. 精修 | **你** | 在 Premiere 匯入 XML 和 SRT 繼續剪輯 |
 
-參考耗時（6 小時 47 分直播，RTX 3060 12GB）：轉錄約 6 分鐘（未含人聲分離），畫面分析約 34 分鐘，AI 挑選約 6–7 分鐘。
+審核時會即時提醒時間超出範圍、裁切不存在、長度不合建議、切在句子中間等問題，也可以按「對齊句子」調整剪點、按「只出這支」單獨輸出；分析和出片都能中途停止。
+
+參考耗時（6 小時多的直播，RTX 3060 12GB）：轉錄約 6 分鐘（未含人聲分離），AI 挑選約 3–9 分鐘。畫面分析預設跳過，開啟時約多 34 分鐘。
 
 ### 用指令
 
@@ -92,9 +94,10 @@ D:\直播\
 python scripts/pipeline.py --video 直播.mp4 --url <YouTube網址> --auto-select
 ```
 
-已完成的步驟會跳過，可以中斷後續跑。要整晚排程，可以參考 `run_overnight.bat`。之後在 Clip Review 審核，或自己寫 `selections.json`，再執行：
+已完成的步驟會跳過，可以中斷後續跑；換了直播檔或分析範圍時會提醒，要重跑請加 `--force`。要整晚排程，可以參考 `run_overnight.bat`。之後在 Clip Review 審核，或自己寫 `selections.json`，再執行：
 
 ```
+python scripts/validate_selections.py --workdir 工作資料夾
 python scripts/refine_transcript.py --workdir 工作資料夾
 python scripts/cut_clips.py --workdir 工作資料夾
 python scripts/export_premiere_xml.py --workdir 工作資料夾

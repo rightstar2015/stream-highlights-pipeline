@@ -63,6 +63,8 @@ details summary { cursor: pointer; color: var(--muted); }
        padding: 12px 16px; display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .files a { color: var(--accent); text-decoration: none; }
 .files li { margin: 4px 0; }
+.issues { grid-column: 1 / -1; font-size: 13px; }
+.issue-error { color: var(--bad); } .issue-warning { color: var(--warn); }
 .empty { color: var(--muted); padding: 30px 0; text-align: center; }
 </style>
 </head>
@@ -99,14 +101,16 @@ details summary { cursor: pointer; color: var(--muted); }
       <label></label>
       <div>
         <label><input type="checkbox" id="auto_select" checked> 分析完讓 Claude 挑選（用 Claude Code，不會自動出片）</label><br>
-        <label><input type="checkbox" id="force"> 全部重跑（預設會沿用已完成的步驟）</label>
+        <label><input type="checkbox" id="force"> 全部重跑（預設會沿用已完成的步驟）</label><br>
+        <label><input type="checkbox" id="visual"> 也跑畫面分析（6 小時直播約多 30 分鐘，預設只當參考）</label>
       </div>
     </div>
     <p style="margin:16px 0 0"><button class="btn primary" id="runAnalyze">開始分析</button>
       <span class="muted">　6 小時直播約需 30–60 分鐘（轉錄最久），可以關掉頁面，之後從「最近的專案」回來。</span></p>
   </div>
   <div class="card" id="jobCard" hidden>
-    <strong id="jobTitle">進度</strong>
+    <div class="row" style="justify-content:space-between"><strong id="jobTitle">進度</strong>
+      <button class="btn" data-stop hidden>停止</button></div>
     <ul class="steps" id="steps"></ul>
     <details><summary>詳細紀錄</summary><pre class="log" id="log"></pre></details>
   </div>
@@ -120,7 +124,8 @@ details summary { cursor: pointer; color: var(--muted); }
 
 <section id="tab-output">
   <div class="card" id="outJob" hidden>
-    <strong>出片進度</strong>
+    <div class="row" style="justify-content:space-between"><strong id="outTitle">出片進度</strong>
+      <button class="btn" data-stop hidden>停止</button></div>
     <ul class="steps" id="outSteps"></ul>
     <details><summary>詳細紀錄</summary><pre class="log" id="outLog"></pre></details>
   </div>
@@ -136,15 +141,33 @@ details summary { cursor: pointer; color: var(--muted); }
 
 <script>
 const $ = s => document.querySelector(s);
-const STEP_NAMES = {pipeline: "整體", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
+const STEP_NAMES = {pipeline: "整體", check: "檢查輸入", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
   visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
 const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
-let project = null, clips = [], pollTimer = null, saveTimer = null;
+let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null;
 
 // ------------------------------------------------------------- keep review edits
 function touch() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveReview, 500);
+  scheduleCheck();
+}
+function scheduleCheck() {
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(checkClips, 500);
+}
+async function checkClips() {
+  if (!project || !clips.length) return;
+  const work = project.work, list = clips.filter(c => c.on);
+  let issues;
+  try { ({issues} = await api("/api/validate", {work, clips: list})); }
+  catch (e) { console.warn(e); return; }
+  if (!project || project.work !== work) return;
+  document.querySelectorAll("#clipList .clip").forEach(el => {
+    const mine = issues.filter(i => i.id === clips[+el.dataset.i]?.id);
+    el.querySelector(".issues").innerHTML = mine.map(i =>
+      `<div class="issue-${i.level}">${i.level === "error" ? "❌" : "⚠️"} ${esc(i.msg)}</div>`).join("");
+  });
 }
 function saveReview(keepalive = false) {
   if (saveTimer === null || !project) return Promise.resolve();
@@ -221,6 +244,7 @@ $("#runAnalyze").onclick = async () => {
   for (const k of ["video", "url", "chat_file", "config", "work", "start", "end"]) body[k] = $("#" + k).value.trim();
   body.auto_select = $("#auto_select").checked;
   body.force = $("#force").checked;
+  body.visual = $("#visual").checked;
   if (!body.video) return alert("請選擇直播檔");
   try {
     const r = await api("/api/analyze", body);
@@ -247,7 +271,10 @@ async function poll() {
   renderSteps(analyze ? $("#steps") : $("#outSteps"), j.events);
   const log = analyze ? $("#log") : $("#outLog");
   log.textContent = j.log.join("\n");
-  if (analyze) $("#jobTitle").textContent = j.running ? "分析中…" : (j.rc === 0 ? "分析完成" : "分析結束（有步驟失敗，見下方）");
+  const result = j.rc === 0 ? "完成" : (j.rc === -1 ? "已停止" : "結束（有步驟失敗，見下方）");
+  if (analyze) $("#jobTitle").textContent = j.running ? "分析中…" : "分析" + result;
+  else $("#outTitle").textContent = j.running ? "出片中…" : "出片" + result;
+  card.querySelector("[data-stop]").hidden = !j.running;
   $("#runAnalyze").disabled = $("#runRender").disabled = j.running;
   if (j.running) { pollTimer = setTimeout(poll, 2000); return; }
   if (j.work && (!project || project.work === j.work || !project.candidates.length)) {
@@ -339,9 +366,12 @@ function renderReview() {
         <textarea class="wide" rows="2" data-k="notes" placeholder="1:02:07 插入驚嚇卡">${esc((c.notes || []).map(noteToLine).join("\n"))}</textarea>
         <div class="wide muted"><span class="chip">${esc(c.from || "")}</span><span class="chip">${clipDuration(c).toFixed(1)} 秒</span>
           ${c.confidence ? `<span class="chip conf-${esc(c.confidence)}">信心 ${esc(c.confidence)}</span>` : ""}${esc(c.summary || "")}</div>
+        <div class="issues"></div>
       </div>
       <div class="media"><div class="pv"></div>
-        <div class="row" style="margin-top:6px"><button class="btn" data-act="preview">預覽</button>
+        <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="btn" data-act="preview">預覽</button>
+        <button class="btn" data-act="snap">對齊句子</button>
+        <button class="btn" data-act="only">只出這支</button>
         <button class="btn" data-act="remove">移除</button></div></div>
     </div>`).join("");
 
@@ -357,6 +387,15 @@ function renderReview() {
       updateCount();
       touch();
     });
+    el.querySelector("[data-act=snap]").onclick = async () => {
+      try {
+        const r = await api("/api/snap", {work: project.work, clip: c});
+        c.segments = r.segments;
+        touch();
+        renderReview();
+      } catch (err) { alert(err.message); }
+    };
+    el.querySelector("[data-act=only]").onclick = () => startRender(c);
     el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); touch(); renderReview(); };
     el.querySelector("[data-act=preview]").onclick = async e => {
       if (!c.segments.length) return;
@@ -385,6 +424,7 @@ function renderReview() {
     </div>`).join("") + "</details>";
   cl.querySelectorAll("[data-add]").forEach(b => b.onclick = () => addCandidate(project.candidates[+b.dataset.add], b.dataset.fmt));
   updateCount();
+  scheduleCheck();
   $("#renderBar").hidden = !$("#tab-review").classList.contains("on") || !clips.length;
 }
 
@@ -393,17 +433,24 @@ function updateCount() {
   $("#selCount").textContent = `已勾選 ${on.length} 支（直式 ${on.filter(c => c.format === "vertical").length}、橫式 ${on.filter(c => c.format === "horizontal").length}）`;
 }
 
-$("#runRender").onclick = async () => {
-  const chosen = clips.filter(c => c.on && c.segments.length).map(({on, from, peak, ...c}) => c);
+$("#runRender").onclick = () => startRender();
+document.querySelectorAll("[data-stop]").forEach(b => b.onclick = async () => {
+  if (!confirm("停止目前的工作？已完成的步驟會保留，下次會接續。")) return;
+  try { await api("/api/stop", {}); } catch (e) { alert(e.message); }
+});
+
+async function startRender(one = null) {
+  const chosen = clips.filter(c => (c.on || c === one) && c.segments.length).map(({on, from, peak, ...c}) => c);
   if (!chosen.length) return alert("沒有勾選任何片段");
   try {
     touch();
     await saveReview();
-    await api("/api/render", {work: project.work, refine: $("#refine").checked, selections: {clips: chosen}});
+    await api("/api/render", {work: project.work, refine: $("#refine").checked, selections: {clips: chosen},
+                              only: one ? [one.id] : []});
     showTab("output");
     poll();
   } catch (e) { alert(e.message); }
-};
+}
 
 // ------------------------------------------------------------- outputs
 function renderOutputs() {
@@ -413,7 +460,8 @@ function renderOutputs() {
   box.innerHTML = `<div class="row" style="justify-content:space-between"><strong>成品</strong>
       <button class="btn" id="openFolder">開啟資料夾</button></div>
     <ul class="files">${files.map(f => `<li><a href="${fileUrl(f)}" target="_blank">${esc(f.split(/[\\/]/).pop())}</a></li>`).join("")}</ul>
-    <p class="muted">Premiere：檔案 &gt; 匯入 XML；字幕 .srt 拖到序列成為字幕軌。</p>`;
+    <p class="muted">Premiere：檔案 &gt; 匯入 XML；字幕 .srt 拖到序列成為字幕軌。</p>
+    ${project.stale_clips.length ? `<p class="muted" style="color:var(--warn)">這些檔案已不在目前的選片裡（不會自動刪除）：${esc(project.stale_clips.join("、"))}</p>` : ""}`;
   $("#openFolder").onclick = () => api("/api/open", {path: files[0]});
 }
 
@@ -423,7 +471,13 @@ function renderOutputs() {
   let last = null;
   try { last = localStorage.getItem("lastWork"); } catch (_) {}
   const j = await api("/api/job");
-  if (j.running) { if (j.work) await openProject(j.work, null); showTab(j.kind === "analyze" ? "analyze" : "output"); poll(); }
+  if (j.interrupted) {
+    if (j.work) await openProject(j.work, null);
+    $("#jobCard").hidden = false;
+    renderSteps($("#steps"), j.events);
+    $("#jobTitle").textContent = "上次的工作沒有做完（伺服器被關閉）。重新開始分析會從已完成的步驟接續。";
+  }
+  else if (j.running) { if (j.work) await openProject(j.work, null); showTab(j.kind === "analyze" ? "analyze" : "output"); poll(); }
   else if (last) openProject(last, null);
 })();
 </script>
