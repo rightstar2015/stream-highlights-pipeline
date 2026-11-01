@@ -139,7 +139,23 @@ const $ = s => document.querySelector(s);
 const STEP_NAMES = {pipeline: "整體", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
   visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
 const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
-let project = null, clips = [], pollTimer = null;
+let project = null, clips = [], pollTimer = null, saveTimer = null;
+
+// ------------------------------------------------------------- keep review edits
+function touch() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveReview, 500);
+}
+function saveReview(keepalive = false) {
+  if (saveTimer === null || !project) return Promise.resolve();
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  return fetch("/api/review_state", {method: "POST", headers: {"Content-Type": "application/json"}, keepalive,
+                                      body: JSON.stringify({work: project.work, clips})})
+    .then(r => { if (!r.ok) throw new Error(r.statusText); })
+    .catch(e => alert("審核內容存檔失敗：" + e.message));
+}
+addEventListener("pagehide", () => saveReview(true));
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
@@ -186,6 +202,7 @@ document.querySelectorAll("[data-pick]").forEach(b => b.onclick = async () => {
 });
 
 async function openProject(work, tab = "review") {
+  await saveReview();
   try { project = await api("/api/project?work=" + encodeURIComponent(work)); }
   catch (e) { alert(e.message); return; }
   try { localStorage.setItem("lastWork", project.work); } catch (_) {}
@@ -263,8 +280,17 @@ function parseNotes(text) {
 
 function buildClips() {
   clips = [];
-  const src = project.draft || project.selections;
-  for (const c of (src && src.clips) || []) clips.push({...c, on: true, from: project.draft ? "Claude 推薦" : "上次的選擇"});
+  // the user's own work wins over Claude's draft
+  if (project.review_state) { clips = project.review_state.clips; return; }
+  if (project.selections) { clips = project.selections.clips.map(c => ({...c, on: true, from: "上次的選擇"})); return; }
+  if (project.draft) clips = project.draft.clips.map(c => ({...c, on: true, from: "Claude 推薦"}));
+}
+function restoreDraft() {
+  if (!confirm("改用 Claude 的推薦？目前審核頁上的修改會被取代（已輸出的檔案不受影響）。")) return;
+  clips = project.draft.clips.map(c => ({...c, on: true, from: "Claude 推薦"}));
+  project.draft_newer = false;
+  touch();
+  renderReview();
 }
 function nextId(fmt) {
   const p = fmt === "vertical" ? "v" : "h";
@@ -277,6 +303,7 @@ function addCandidate(c, fmt) {
   clips.push({id: nextId(fmt), format: fmt, title: `候選 ${c.peak_ts}`, on: true, from: `訊號候選 ${c.id}`,
               segments: [fmt === "vertical" ? {in: fmtTs(a), out: fmtTs(b), crop: "game"} : [fmtTs(a), fmtTs(b)]],
               notes: [], peak: c.peak});
+  touch();
   renderReview();
 }
 
@@ -290,7 +317,11 @@ function renderReview() {
   const n = project.candidates.length;
   head.innerHTML = `<div><strong>${esc(project.work)}</strong></div>
     <div class="muted">直播檔：${esc(project.video || "（未記錄）")}　設定檔：${esc(project.config || "（預設）")}　訊號候選 ${n} 個　${project.draft ? `Claude 推薦 ${project.draft.clips.length} 支` : "尚未讓 Claude 挑選"}</div>
+    ${project.draft_newer ? `<div class="muted" style="margin-top:8px;color:var(--warn)">Claude 有新的推薦，目前顯示的是你之前的審核內容。</div>` : ""}
+    ${project.draft && (project.selections || project.review_state) ? `<p style="margin:8px 0 0"><button class="btn" id="restoreDraft">改用 Claude 的推薦</button></p>` : ""}
     ${project.review ? `<details style="margin-top:8px"><summary>Claude 的候選說明（candidates_review.md）</summary><div class="review-md">${esc(project.review)}</div></details>` : ""}`;
+
+  if ($("#restoreDraft")) $("#restoreDraft").onclick = restoreDraft;
 
   const list = $("#clipList");
   list.hidden = !clips.length;
@@ -324,8 +355,9 @@ function renderReview() {
       else c[k] = inp.value;
       if (k === "format" || k === "segments") renderReview();
       updateCount();
+      touch();
     });
-    el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); renderReview(); };
+    el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); touch(); renderReview(); };
     el.querySelector("[data-act=preview]").onclick = async e => {
       if (!c.segments.length) return;
       e.target.disabled = true; e.target.textContent = "產生中…";
@@ -365,6 +397,8 @@ $("#runRender").onclick = async () => {
   const chosen = clips.filter(c => c.on && c.segments.length).map(({on, from, peak, ...c}) => c);
   if (!chosen.length) return alert("沒有勾選任何片段");
   try {
+    touch();
+    await saveReview();
     await api("/api/render", {work: project.work, refine: $("#refine").checked, selections: {clips: chosen}});
     showTab("output");
     poll();

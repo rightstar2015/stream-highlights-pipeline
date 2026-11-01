@@ -172,7 +172,60 @@ def main():
     except urllib.error.HTTPError as e:
         blocked = e.code == 403
     check(blocked, "Clip Review：不提供專案資料夾以外的檔案")
+
+    def status(path, body=None, **headers):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        hdr = {k.replace("_", "-"): v for k, v in headers.items()}
+        if body is not None:
+            hdr.setdefault("Content-Type", "application/json")
+        try:
+            return urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=hdr)).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    state = {"work": str(W2), "clips": [{"id": "v01", "on": False, "title": "我改過的"}]}
+    check(status("/api/job", Host="evil.example") == 403, "Clip Review：擋下其他 Host（DNS rebinding）")
+    check(status("/api/review_state", state, Origin="https://evil.example") == 403, "Clip Review：擋下其他網站的 POST")
+    check(status("/api/review_state", state, Content_Type="text/plain") == 415, "Clip Review：POST 必須是 JSON")
+    check(status("/api/job", Sec_Fetch_Site="cross-site") == 403, "Clip Review：擋下其他網站的 GET")
+    check(status("/api/review_state", dict(state, work=str(OUT))) == 403, "Clip Review：不接受未開啟的資料夾")
+    check(status(f"/api/project?work={quote(str(OUT / 'ref_none'))}") == 404
+          and status(f"/api/project?work={quote(str(HERE))}") == 400, "Clip Review：一般資料夾不會被當成專案")
+    check(status("/api/open", {"path": str(video)}) == 403, "Clip Review：不開啟專案以外的路徑")
+    check(status("/api/review_state", state, Origin=base) == 200, "Clip Review：接受自己頁面的請求")
+    st = json.loads(urllib.request.urlopen(f"{base}/api/project?work={quote(str(W2))}").read())
+    check(st["review_state"]["clips"][0]["title"] == "我改過的", "Clip Review：審核內容重新開啟後還在")
     srv.shutdown()
+
+    # headless picks: Claude's printed result is validated before anything is written
+    from pipeline import parse_auto_output
+
+    def result(draft, review="# 候選"):
+        body = draft if isinstance(draft, str) else json.dumps(draft, ensure_ascii=False)
+        return (f"<<<CANDIDATES_REVIEW>>>\n{review}\n<<<END_CANDIDATES_REVIEW>>>\n"
+                f"<<<SELECTIONS_DRAFT_JSON>>>\n{body}\n<<<END_SELECTIONS_DRAFT_JSON>>>")
+
+    def rejected(text):
+        try:
+            parse_auto_output(text, "x.mp4")
+            return False
+        except ValueError:
+            return True
+    good = {"id": "v01", "format": "vertical", "title": "t", "confidence": "高", "layout": {"template_png": "x"},
+            "segments": [{"in": "1:00", "out": "1:20", "crop": "game", "evil": 1}]}
+    fake = result({"source": "other.mp4", "clips": [{"id": "x", "format": "horizontal", "segments": [[1, 2]]}]})
+    review, draft = parse_auto_output(fake + "\n" + result({"source": "other.mp4", "clips": [good]}), "x.mp4")
+    c = draft["clips"][0]
+    check(review == "# 候選" and draft["source"] == "x.mp4" and c["id"] == "v01" and "layout" not in c
+          and c["segments"] == [{"in": "1:00", "out": "1:20", "crop": "game"}],
+          "自動挑選：只取最後一份結果，來源固定，移除多餘欄位")
+    check(parse_auto_output(result("```json\n" + json.dumps({"clips": [good]}) + "\n```"), "x.mp4")[1]["clips"],
+          "自動挑選：接受 JSON 程式碼區塊")
+    check(all(rejected(t) for t in ("沒有標記", result("{壞掉"), result({"clips": []}),
+                                    result({"clips": [dict(good, id="../x")]}),
+                                    result({"clips": [dict(good, format="other")]}),
+                                    result({"clips": [good, good]}),
+                                    result({"clips": [dict(good, segments=[[20, 10]])]}))),
+          "自動挑選：不合格的結果都不會存檔")
 
     sel = {"source": str(video), "clips": [
         {"id": "v01", "format": "vertical", "title": "打王暴斃", "header_title": "我破防了",
