@@ -75,6 +75,9 @@
     ]
   },
 
+  "_auto_select_說明": "pipeline.py --auto-select 最多推薦幾支；超過時依信心留下較好的。",
+  "auto_select": {"max_vertical": 8, "max_horizontal": 5},
+
   "_limits_說明": "validate_selections.py 的建議長度（秒），超出只會提醒，不會擋下出片。",
   "limits": {"vertical_sec": [18, 35], "horizontal_sec": [120, 240]},
 

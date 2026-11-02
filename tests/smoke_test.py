@@ -345,6 +345,13 @@ def main():
     check(any("句子中間" in m for _, m in [(i["level"], i["msg"]) for i in
               validate([dict(base_clip, segments=[{"in": 15, "out": 40}])], vcfg, segs=sent)]), "選片檢查：切在句子中間會提醒")
 
+    from pipeline import limit_picks
+    picks = [{"id": f"v{i}", "format": "vertical", "confidence": c} for i, c in enumerate(["低", "中", "高", "高"])]
+    picks.append({"id": "h1", "format": "horizontal", "confidence": "低"})
+    kept, dropped = limit_picks(picks, {"max_vertical": 2, "max_horizontal": 1})
+    check([c["id"] for c in kept] == ["v2", "v3", "h1"] and {c["id"] for c in dropped} == {"v0", "v1"},
+          "推薦上限：依信心留下較好的，直式橫式分開算")
+
     from pipeline import coverage_warning
     tm = """## 話題地圖
 - [0:00:00–1:00:00] 開場

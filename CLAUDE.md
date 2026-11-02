@@ -78,6 +78,8 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `signals.py` 的聊天室時間差提示：兩場已對齊的直播都沒誤報；人為平移的聊天室估得出位移，但相關性不高（0.2 左右），所以只當提示。
 - 分離人聲重跑 vocal_events：排名沒有明顯改善。
+- PANNs Cnn14（分離後人聲，6 小時 25 分約 45 秒）：6 支人工選片裡有 3 支笑聲、尖叫分數都接近 0，因為這類精華是金句而不是反應。加權後只有 1 支明顯升名，所以不整合。反應型頻道也許不同，但沒有測。
+- 推薦上限（`auto_select`，預設直式 8、橫式 5）：同一場推薦 13 支、18 分鐘，涵蓋過半仍是 5/6，有重疊從 6/6 變 5/6，精準度 16% → 18%。
 
 尚未在真實環境驗證：`fetch_chat.py --url`；`suggest_terms.py`（還沒有真實校正稿）。
 
@@ -86,5 +88,4 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 - 重轉時關掉 VAD 會讓 Whisper 把 initial_prompt 當字幕吐出，並吞掉後面 20–40 秒，所以 refine 保留 VAD、預設不帶 prompt／hotwords；另有「重轉字數 < 原本一半就保留原文」的保險。
 - `hotwords` 放太多會增加幻覺，保持 1–3 個。
 - `whisper.filter` 依 no_speech_prob／compression_ratio／avg_logprob 過濾幻覺，被濾掉的記在 `WORK/transcript_dropped.txt`。實測兩段各 30 分鐘的雜談都沒濾到東西（無誤殺，但實際效果只由單元測試驗證），配樂重的遊戲直播還沒測。
-- 訊號要再改進可以考慮 PANNs 之類的音訊分類模型（AudioSet 有 Screaming／Laughter 類別）。
 - 片尾卡、轉場字卡目前只在 notes 標示，未來可以讓 XML 直接帶入素材檔。

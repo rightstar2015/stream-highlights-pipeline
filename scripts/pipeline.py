@@ -120,7 +120,8 @@ python scripts/frames.py --video "{video}" --workdir "{work}" --times 1:23:45 2:
 <<<END_CANDIDATES_REVIEW>>>
 <<<SELECTIONS_DRAFT_JSON>>>
 同 selections.json 格式的 JSON（見 scripts/cut_clips.py 開頭），收錄你推薦的每一支，
-每支額外加 "summary"（一句話）與 "confidence"（高/中/低）欄位
+每支額外加 "summary"（一句話）與 "confidence"（高/中/低）欄位。
+最多 {max_vertical} 支直式、{max_horizontal} 支橫式，只留最值得剪的；依信心從高到低排列。信心要誠實，多留無益，使用者要逐支審核。
 <<<END_SELECTIONS_DRAFT_JSON>>>
 不要執行 refine_transcript.py、cut_clips.py、export_premiere_xml.py，不要出片。"""
 
@@ -171,6 +172,18 @@ def clean_segment(seg):
     if not ok:
         raise ValueError(f"裁切格式不正確：{crop!r}")
     return {k: seg[k] for k in ("in", "out", "crop") if k in seg}
+
+
+def limit_picks(clips, limits):
+    """Order by confidence and keep at most the configured number per format, in case Claude went
+    over. -> (kept, dropped). Picks of equal confidence keep Claude's order."""
+    rank = {"高": 0, "中": 1, "低": 2}
+    caps = {"vertical": limits.get("max_vertical", 8), "horizontal": limits.get("max_horizontal", 5)}
+    kept, dropped, used = [], [], {}
+    for c in sorted(clips, key=lambda c: rank.get(c.get("confidence"), 1)):
+        used[c["format"]] = used.get(c["format"], 0) + 1
+        (kept if used[c["format"]] <= caps[c["format"]] else dropped).append(c)
+    return kept, dropped
 
 
 def parse_auto_output(text, source):
@@ -228,9 +241,12 @@ def auto_select(args, paths, log):
     if paths["draft"].exists() and not args.force:
         emit(log, "auto_select", "skip")
         return True
+    limits = load_config(args.config).get("auto_select", {})
     lines = sum(1 for _ in open(paths["transcript_txt"], encoding="utf-8")) if paths["transcript_txt"].exists() else 0
     prompt = AUTO_PROMPT.format(skill=SKILL_DIR, video=args.video, work=paths["dir"].resolve(),
-                                config=args.config or "（無，使用預設）", lines=lines)
+                                config=args.config or "（無，使用預設）", lines=lines,
+                                max_vertical=limits.get("max_vertical", 8),
+                                max_horizontal=limits.get("max_horizontal", 5))
     # prompt goes in on stdin: --add-dir / --tools / --allowedTools take several values and would swallow it.
     # --tools removes every other tool (no writing, no web, no MCP); dontAsk denies anything not allowed.
     # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside this folder and WORK.
@@ -253,6 +269,10 @@ def auto_select(args, paths, log):
     else:
         try:
             review, draft = parse_auto_output(text, args.video)
+            draft["clips"], dropped = limit_picks(draft["clips"], limits)
+            if dropped:
+                names = "、".join(str(c.get("title") or c["id"]) for c in dropped)
+                review += f"\n\n（超過推薦上限，未放進草稿：{names}）"
             paths["review"].write_text(review + "\n", encoding="utf-8")
             save_json(draft, paths["draft"])
             segs = load_json(paths["transcript_json"])["segments"] if paths["transcript_json"].exists() else []
