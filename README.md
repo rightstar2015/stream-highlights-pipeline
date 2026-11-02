@@ -119,6 +119,27 @@ New-Item -ItemType Junction -Path "$HOME\.claude\skills\stream-highlights-pipeli
 - **字幕**：`clips/*.srt` 不在 XML 裡，要另外匯入後拖到序列上。
 - **離線媒體**：直播檔被移動過時會出現，對它按右鍵選「連結媒體」。
 
+## 其他工具
+
+- `python tools/eval_selections.py --truth 人工選片.json --pred selections.draft.json`：評估推薦和人工選片的重疊。
+- `python scripts/suggest_terms.py --original 原.srt --corrected 校正.srt`：從校正過的字幕找出固定會錯的詞。
+- 出片時會把你對 Claude 推薦的修改記在 `references/feedback_log.md`（只留在本機），下次挑選會參考。
+
+## 說話者辨識（選用）
+
+多人連動時，可以標出每句字幕可能是誰說的，方便把字卡分軌。實測三人連動約 76% 正確，也可能多分出一位，**只能當草稿**，要對照畫面確認。原本的 SRT 不會被改動。
+
+1. 到 [模型頁面](https://huggingface.co/pyannote/speaker-diarization-community-1) 同意條款，建立 Read 權限的 token，執行 `hf auth login` 登入。
+2. 建議裝在獨立環境，以免影響其他套件：`pip install pyannote.audio`
+3. 執行（整場約 2 分鐘／小時）：
+
+```
+python scripts/diarize.py --video 直播.mp4 --workdir 工作資料夾
+python scripts/diarize.py --workdir 工作資料夾 --label
+```
+
+會產生 `clips/<片名>_說話者.srt`。在 `config.json` 加上 `"speakers": {"SPEAKER_01": "名字"}` 就會顯示名字。
+
 ## 測試
 
 ```

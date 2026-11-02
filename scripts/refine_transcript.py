@@ -77,7 +77,7 @@ def main():
         else:
             from separate import SR_WHISPER, read_audio
             audio = read_audio(src, a, b - a, SR_WHISPER, 1)[0]
-        segs, _ = run_whisper(model, audio, kwargs, conv, offset=a)
+        segs, _ = run_whisper(model, audio, kwargs, conv, offset=a, limits=wcfg.get("filter"))
         segs = [s for s in segs if s["start"] < b]
         n_new, n_old = chars_in(segs, a, b), chars_in(base, a, b)
         if n_old >= 10 and n_new < 0.5 * n_old:

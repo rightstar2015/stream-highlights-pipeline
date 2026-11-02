@@ -150,6 +150,7 @@ def work_paths(workdir):
         "dir": w,
         "transcript_json": w / "transcript.json",
         "transcript_txt": w / "transcript.txt",
+        "dropped_txt": w / "transcript_dropped.txt",
         "refined_json": w / "transcript_refined.json",
         "refined_txt": w / "transcript_refined.txt",
         "chat": w / "chat.jsonl",

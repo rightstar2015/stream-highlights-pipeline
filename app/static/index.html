@@ -310,11 +310,15 @@ function buildClips() {
   // the user's own work wins over Claude's draft
   if (project.review_state) { clips = project.review_state.clips; return; }
   if (project.selections) { clips = project.selections.clips.map(c => ({...c, on: true, from: "上次的選擇"})); return; }
-  if (project.draft) clips = project.draft.clips.map(c => ({...c, on: true, from: "Claude 推薦"}));
+  if (project.draft) clips = draftClips();
+}
+// low-confidence picks start unchecked: still there to look at, but not rendered by default
+function draftClips() {
+  return project.draft.clips.map(c => ({...c, on: c.confidence !== "低", from: "Claude 推薦"}));
 }
 function restoreDraft() {
   if (!confirm("改用 Claude 的推薦？目前審核頁上的修改會被取代（已輸出的檔案不受影響）。")) return;
-  clips = project.draft.clips.map(c => ({...c, on: true, from: "Claude 推薦"}));
+  clips = draftClips();
   project.draft_newer = false;
   touch();
   renderReview();

@@ -9,7 +9,9 @@
     "hotwords": [],
     "_refine_說明": "refine_transcript.py 重轉選定段落用的模型；refine_separate 為 true 時先用 Demucs 分離人聲",
     "refine_model": "large-v3",
-    "refine_separate": true
+    "refine_separate": true,
+    "_filter_說明": "過濾疑似幻覺的段落，判準同 Whisper 官方：重複度過高，或「模型認為沒人說話」且信心低。被濾掉的內容記在 WORK/transcript_dropped.txt。",
+    "filter": {"compression_ratio_max": 2.4, "no_speech_prob_max": 0.6, "avg_logprob_min": -1.0}
   },
   "chinese_convert": "s2twp",
   "_text_replacements_說明": "轉錄後固定替換常見錯字，例如主播名被聽成同音字：{\"小銘\": \"小明\"}",
@@ -72,6 +74,9 @@
       {"from": "V6", "to": "V3", "name": "來賓B", "image": "頭像/來賓B.png"}
     ]
   },
+
+  "_auto_select_說明": "pipeline.py --auto-select 最多推薦幾支；超過時依信心留下較好的。",
+  "auto_select": {"max_vertical": 8, "max_horizontal": 5},
 
   "_limits_說明": "validate_selections.py 的建議長度（秒），超出只會提醒，不會擋下出片。",
   "limits": {"vertical_sec": [18, 35], "horizontal_sec": [120, 240]},
