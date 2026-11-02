@@ -79,8 +79,13 @@ def sheet(path, info, out):
     font = Path("C:/Windows/Fonts/arial.ttf")
     if font.exists():
         ts += ":fontfile='" + font.as_posix().replace(":", "\\:") + "'"
+    # some builds (e.g. Homebrew's) have no drawtext; the sheet is still useful without time labels
+    if " drawtext " not in run(["ffmpeg", "-v", "error", "-filters"]).stdout:
+        print("[提示] 這個 FFmpeg 沒有 drawtext，縮圖表不會標時間")
+        ts = None
+    label = f"{ts}," if ts else ""
     run(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-vf",
-         f"fps=1/{step:.3f},scale={size},{ts},tile={cols}x{rows}", "-frames:v", "1", "-q:v", "3", str(out)])
+         f"fps=1/{step:.3f},scale={size},{label}tile={cols}x{rows}", "-frames:v", "1", "-q:v", "3", str(out)])
     return step
 
 
