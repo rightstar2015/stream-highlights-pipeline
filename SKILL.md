@@ -136,6 +136,10 @@ python scripts/export_premiere_xml.py --workdir WORK
 - 抽看每支 SRT 前幾行，有明顯錯字（主播名、遊戲名）：固定會錯的詞加進 `text_replacements`，重跑 `refine_transcript.py` 和 `cut_clips.py --srt-only`。使用者有校正過的 SRT 時，可用 `python scripts/suggest_terms.py --original 原.srt --corrected 校正.srt` 找出固定會錯的詞，給使用者確認後再加。
 - 回報：產出了哪些檔案、XML 怎麼匯入、SRT 怎麼匯入（Premiere：檔案 > 匯入 .srt，拖到序列成為字幕軌）。
 
+## 5.5 說話者標籤（選用，多人連動時）
+
+使用者想依說話者分軌字卡時：`python scripts/diarize.py --video 直播.mp4 --workdir WORK`，再 `python scripts/diarize.py --workdir WORK --label`，產生 `_說話者.srt`。需要 pyannote 和 Hugging Face 登入（見 README）。實測約 76% 正確，要告訴使用者這是草稿。
+
 ## 6. 說話者頭像（選用，使用者後製時）
 
 剪輯師在 Premiere 把字卡依說話者分軌（例如 V5＝來賓A、V6＝來賓B），想在別的軌放對應的頭像時：

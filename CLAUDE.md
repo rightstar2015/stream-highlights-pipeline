@@ -35,6 +35,7 @@ scripts/
   validate_selections.py        選片檢查（時間、裁切、長度、切在句子中間）；snap_range 對齊句子邊界
   learn_feedback.py             比對草稿與最終選片，寫入 references/feedback_log.md（不進 git）
   suggest_terms.py              比對校正前後的 SRT，建議 text_replacements（不會自動寫入）
+  diarize.py                    選用：pyannote 說話者辨識 → speakers.json 與帶標籤的 SRT（草稿）
   setup_check.py                環境檢查
 tools/eval_selections.py        拿人工選片評估推薦或候選：每支涵蓋率、精準度、最佳名次
 app/server.py                   Clip Review：本機網頁介面（只用標準函式庫，綁 127.0.0.1）
@@ -80,6 +81,8 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 - 分離人聲重跑 vocal_events：排名沒有明顯改善。
 - PANNs Cnn14（分離後人聲，6 小時 25 分約 45 秒）：6 支人工選片裡有 3 支笑聲、尖叫分數都接近 0，因為這類精華是金句而不是反應。加權後只有 1 支明顯升名，所以不整合。反應型頻道也許不同，但沒有測。
 - 推薦上限（`auto_select`，預設直式 8、橫式 5）：同一場推薦 13 支、18 分鐘，涵蓋過半仍是 5/6，有重疊從 6/6 變 5/6，精準度 16% → 18%。
+
+- `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
 尚未在真實環境驗證：`fetch_chat.py --url`；`suggest_terms.py`（還沒有真實校正稿）。
 

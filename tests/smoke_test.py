@@ -345,6 +345,26 @@ def main():
     check(any("句子中間" in m for _, m in [(i["level"], i["msg"]) for i in
               validate([dict(base_clip, segments=[{"in": 15, "out": 40}])], vcfg, segs=sent)]), "選片檢查：切在句子中間會提醒")
 
+    # speaker labels (the pyannote model itself is not run here)
+    from diarize import clip_to_source, label_srt, speaker_for
+    turns = [[10, 20, "A"], [20, 30, "B"], [40, 50, "A"], [40, 50, "B"]]
+    check(speaker_for(11, 19, turns) == "A" and speaker_for(18, 29, turns) == "B" and speaker_for(60, 70, turns) is None,
+          "說話者：取講最多的人，沒人說話就不猜")
+    check(speaker_for(41, 49, [[41, 45, "A"], [45, 49, "B"], [45, 49, "C"]]) is None, "說話者：沒有人過半就不猜")
+    jump = [{"a": 10, "b": 20}, {"a": 100, "b": 110}]
+    check(clip_to_source(jump, 5) == 15 and clip_to_source(jump, 12) == 102, "說話者：跳剪的時間換算正確")
+    srt = """1
+00:00:01,000 --> 00:00:02,000
+第一句
+
+2
+00:00:11,000 --> 00:00:12,000
+第二句
+"""
+    got = label_srt(srt, [{"a": 10, "b": 20}, {"a": 20, "b": 30}], turns, {"A": "小明"})
+    check("[小明] 第一句" in got and "[B] 第二句" in got and "00:00:11,000 --> 00:00:12,000" in got,
+          f"說話者：SRT 加上標籤，時間不變（{got!r}）")
+
     from pipeline import limit_picks
     picks = [{"id": f"v{i}", "format": "vertical", "confidence": c} for i, c in enumerate(["低", "中", "高", "高"])]
     picks.append({"id": "h1", "format": "horizontal", "confidence": "低"})
