@@ -1,0 +1,14 @@
+{
+  "language": "en",
+  "chinese_convert": "",
+  "whisper": {"initial_prompt": "This is a transcript of a gaming live stream."},
+  "subtitles": {"vertical_max_chars": 24, "horizontal_max_chars": 42},
+  "chat_keywords": {
+    "lol": 0.8, "lmao": 1.2, "lmfao": 1.2, "rofl": 1.0, "omg": 0.8, "wtf": 1.0, "???": 1.2,
+    "clip": 1.5, "clip it": 2.0, "pog": 1.0, "poggers": 1.0, "LUL": 1.0, "KEKW": 1.0,
+    "rip": 0.8, "no way": 1.0, "cute": 0.6, "😂": 1.0, "🤣": 1.0
+  },
+  "speech_keywords": {
+    "wait": 0.6, "no no no": 1.2, "oh my god": 1.2, "what the": 1.0, "help": 0.6, "no way": 1.0, "i'm dead": 1.0
+  }
+}

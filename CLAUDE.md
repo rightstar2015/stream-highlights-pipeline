@@ -14,6 +14,7 @@
 ```
 SKILL.md                        Skill 流程（Claude 執行精華剪輯時讀的）
 config.example.json             預設設定；使用者的 config.json 只需覆寫差異（common.load_config 會深度合併）
+languages/<名稱>.json           語言設定檔（辨識語言、簡轉繁、關鍵字、字幕字數），由 language_profile 選擇，疊在預設和 config.json 之間
 references/client_style.example.md  甲方風格範本
 references/selection_guide.md   通用選段準則
 scripts/
@@ -39,9 +40,10 @@ scripts/
   setup_check.py                環境檢查
 tools/eval_selections.py        拿人工選片評估推薦或候選：每支涵蓋率、精準度、最佳名次
 app/server.py                   Clip Review：本機網頁介面（只用標準函式庫，綁 127.0.0.1）
-app/static/index.html           單頁前端（分析／審核／出片）
-start_clip_review.bat           雙擊啟動 Clip Review
-run_overnight.bat               排程整晚跑分析＋Claude 挑選的範例
+app/static/index.html           單頁前端（分析／審核／出片／版型校正）
+start_clip_review.bat／.sh      啟動 Clip Review
+run_overnight.bat／.sh          排程整晚跑分析＋Claude 挑選的範例
+.github/workflows/smoke.yml     在 Windows、Linux、macOS 跑 smoke test
 tests/smoke_test.py             合成素材端對端測試（只需 ffmpeg＋numpy，約 2–3 分鐘；不測 whisper／demucs 本身）
 ```
 
@@ -85,7 +87,9 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
-尚未在真實環境驗證：`fetch_chat.py --url`；`suggest_terms.py`（還沒有真實校正稿）；`export_premiere_xml.py` 的 `premiere.cards`（只有 smoke test 檢查 XML 內容，還沒匯入 Premiere）。
+- `fetch_chat.py --url`：6 小時多的存檔約 6 秒，491 則留言和最後一則的時間都與之前下載的檔案相同。沒有 JavaScript 執行環境時 yt-dlp 會警告缺少影片格式，不影響聊天室。
+
+尚未在真實環境驗證：macOS／Linux（只有 CI 的 smoke test，用真實直播沒跑過）；`languages/en.json`；`suggest_terms.py`（還沒有真實校正稿）；`export_premiere_xml.py` 的 `premiere.cards`（只有 smoke test 檢查 XML 內容，還沒匯入 Premiere）。
 
 ## 轉錄的踩坑紀錄
 

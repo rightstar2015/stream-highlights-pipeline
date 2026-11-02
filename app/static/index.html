@@ -66,6 +66,13 @@ details summary { cursor: pointer; color: var(--muted); }
 .issues { grid-column: 1 / -1; font-size: 13px; }
 .issue-error { color: var(--bad); } .issue-warning { color: var(--warn); }
 .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+.layout { display: grid; grid-template-columns: 1fr 240px; gap: 16px; margin-top: 12px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+.stage { position: relative; touch-action: none; cursor: crosshair; user-select: none; line-height: 0; }
+.stage img { width: 100%; border-radius: 8px; display: block; }
+#cropBox { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(0,0,0,.45); cursor: move; }
+.stage { overflow: hidden; border-radius: 8px; }
+#cropResult { width: 100%; border-radius: 8px; display: block; background: #000; min-height: 200px; }
 </style>
 </head>
 <body>
@@ -75,6 +82,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <button data-tab="analyze" class="on">1. 分析</button>
     <button data-tab="review">2. 審核</button>
     <button data-tab="output">3. 出片</button>
+    <button data-tab="layout">版型校正</button>
   </nav>
   <div class="proj">
     <select id="recent"><option value="">— 最近的專案 —</option></select>
@@ -130,6 +138,32 @@ details summary { cursor: pointer; color: var(--muted); }
     <details><summary>詳細紀錄</summary><pre class="log" id="outLog"></pre></details>
   </div>
   <div class="card"><div id="outFiles"><div class="empty">還沒有成品。</div></div></div>
+</section>
+
+<section id="tab-layout">
+  <div class="card">
+    <div class="empty" id="layoutEmpty">先在「分析」完成一場，或從右上角開啟專案。</div>
+    <div id="layoutBody" hidden>
+      <div class="row" style="flex-wrap:wrap">
+        <label>裁切</label><select id="cropName" style="width:auto"></select>
+        <input type="text" id="cropNew" placeholder="新裁切的名稱" style="width:160px" hidden>
+        <label>畫面時間</label><input type="text" id="cropAt" style="width:110px">
+        <button class="btn" id="cropLoad">換畫面</button>
+        <label><input type="checkbox" id="cropLock" checked> 鎖定內容視窗比例</label>
+      </div>
+      <p class="muted" style="margin:8px 0 0">在左邊的畫面上拖出要裁切的範圍，拖框內可以移動。座標以直播原始尺寸計算。</p>
+      <div class="layout">
+        <div class="stage" id="stage"><img id="cropFrame" alt="" draggable="false"><div id="cropBox" hidden></div></div>
+        <img id="cropResult" alt="">
+      </div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap">
+        <span class="muted" id="cropInfo"></span><span style="flex:1"></span>
+        <button class="btn" id="cropPreview">預覽結果</button>
+        <button class="btn primary" id="cropSave">存進設定檔</button>
+      </div>
+      <p class="muted" id="cropMsg" style="margin:8px 0 0"></p>
+    </div>
+  </div>
 </section>
 </main>
 
@@ -206,6 +240,7 @@ function showTab(t) {
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
   $("#renderBar").hidden = t !== "review" || !clips.length;
+  if (t === "layout") loadLayout();
 }
 
 async function loadRecent() {
@@ -292,7 +327,9 @@ function parseSegs(text) {
   const out = [];
   for (const line of text.split("\n")) {
     const m = line.match(/^\s*([\d:.]+)\s*[-–~到]\s*([\d:.]+)\s*(\S+)?/);
-    if (m) out.push(m[3] ? {in: m[1], out: m[2], crop: m[3]} : {in: m[1], out: m[2]});
+    // a crop can be a preset name or x,y,w,h
+    const crop = m && m[3] && /^\d+(,\d+){3}$/.test(m[3]) ? m[3].split(",").map(Number) : m && m[3];
+    if (m) out.push(crop ? {in: m[1], out: m[2], crop} : {in: m[1], out: m[2]});
   }
   return out;
 }
@@ -468,6 +505,122 @@ function renderOutputs() {
     ${project.stale_clips.length ? `<p class="muted" style="color:var(--warn)">這些檔案已不在目前的選片裡（不會自動刪除）：${esc(project.stale_clips.join("、"))}</p>` : ""}`;
   $("#openFolder").onclick = () => api("/api/open", {path: files[0]});
 }
+
+// ------------------------------------------------------------- layout calibration
+const cropUi = {work: null, state: null, rect: null, drag: null};
+
+async function loadLayout() {
+  $("#layoutEmpty").hidden = !!project;
+  $("#layoutBody").hidden = !project;
+  if (!project || cropUi.work === project.work) return;
+  try { cropUi.state = await api("/api/crop_state", {work: project.work}); }
+  catch (e) { $("#layoutEmpty").hidden = false; $("#layoutEmpty").textContent = e.message; $("#layoutBody").hidden = true; return; }
+  cropUi.work = project.work;
+  $("#cropAt").value = fmtTs(cropUi.state.at);
+  fillCropNames();
+  await loadCropFrame();
+  $("#cropMsg").textContent = (cropUi.state.template_mode ? "" : "目前的 vertical_layout.mode 不是 template，這裡的裁切不會用到。　")
+    + `設定檔：${cropUi.state.config || "（還沒有，儲存時會在直播檔旁邊建立 config.json）"}`;
+}
+function fillCropNames(selected) {
+  const sel = $("#cropName");
+  sel.length = 0;
+  for (const [name, p] of Object.entries(cropUi.state.presets)) {
+    sel.add(new Option(name, name));
+    if (!Array.isArray(p) && p.pip) sel.add(new Option(name + "（小窗）", name + "#pip"));
+  }
+  sel.add(new Option("＋新增…", "#new"));
+  sel.value = selected || sel.options[0].value;
+  pickCrop();
+}
+function cropTarget() {
+  const v = $("#cropName").value, isNew = v === "#new";
+  const [name, part] = isNew ? [$("#cropNew").value.trim()] : v.split("#");
+  return {name, pip: part === "pip", isNew, preset: isNew ? null : cropUi.state.presets[name]};
+}
+function pickCrop() {
+  const t = cropTarget();
+  $("#cropNew").hidden = !t.isNew;
+  $("#cropLock").disabled = t.pip;
+  if (t.preset) cropUi.rect = [...(t.pip ? t.preset.pip.region : (t.preset.region || t.preset))];
+  drawCrop();
+}
+$("#cropName").onchange = pickCrop;
+async function loadCropFrame() {
+  try {
+    const {url} = await api("/api/crop_frame", {work: project.work, at: $("#cropAt").value});
+    $("#cropFrame").src = url + "&v=" + Date.now();
+  } catch (e) { alert(e.message); }
+}
+$("#cropLoad").onclick = loadCropFrame;
+$("#cropFrame").onload = drawCrop;
+addEventListener("resize", drawCrop);
+function drawCrop() {
+  const box = $("#cropBox"), img = $("#cropFrame"), r = cropUi.rect;
+  box.hidden = !r || !img.clientWidth;
+  if (box.hidden) return;
+  const k = img.clientWidth / cropUi.state.width;
+  Object.assign(box.style, {left: r[0] * k + "px", top: r[1] * k + "px", width: r[2] * k + "px", height: r[3] * k + "px"});
+  $("#cropInfo").textContent = `x ${r[0]}，y ${r[1]}，寬 ${r[2]}，高 ${r[3]}`;
+}
+function stagePoint(e) {
+  const b = $("#cropFrame").getBoundingClientRect(), {width: W, height: H} = cropUi.state;
+  return [Math.min(W, Math.max(0, (e.clientX - b.left) * W / b.width)),
+          Math.min(H, Math.max(0, (e.clientY - b.top) * H / b.height))];
+}
+$("#stage").onpointerdown = e => {
+  if (!cropUi.state) return;
+  const [x, y] = stagePoint(e), r = cropUi.rect;
+  const inside = r && x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3];
+  cropUi.drag = inside ? {move: true, dx: x - r[0], dy: y - r[1]} : {x, y};
+  $("#stage").setPointerCapture(e.pointerId);
+};
+$("#stage").onpointermove = e => {
+  const d = cropUi.drag;
+  if (!d) return;
+  const [x, y] = stagePoint(e), {width: W, height: H, content_box: cb} = cropUi.state;
+  if (d.move) {
+    const r = cropUi.rect;
+    r[0] = Math.round(Math.min(W - r[2], Math.max(0, x - d.dx)));
+    r[1] = Math.round(Math.min(H - r[3], Math.max(0, y - d.dy)));
+  } else {
+    let w = Math.abs(x - d.x), h = Math.abs(y - d.y);
+    if ($("#cropLock").checked && !$("#cropLock").disabled) {
+      const ratio = cb[2] / cb[3], roomH = y >= d.y ? H - d.y : d.y;
+      w = Math.min(w, roomH * ratio);
+      h = w / ratio;
+    }
+    cropUi.rect = [Math.round(x >= d.x ? d.x : d.x - w), Math.round(y >= d.y ? d.y : d.y - h), Math.round(w), Math.round(h)];
+  }
+  drawCrop();
+};
+$("#stage").onpointerup = () => { cropUi.drag = null; };
+function cropValue() {
+  const t = cropTarget(), r = cropUi.rect;
+  if (!t.preset || Array.isArray(t.preset)) return r;
+  const p = JSON.parse(JSON.stringify(t.preset));
+  if (t.pip) p.pip.region = r; else p.region = r;
+  return p;
+}
+$("#cropPreview").onclick = async () => {
+  if (!cropUi.rect) return alert("先拖出裁切範圍");
+  try {
+    const {url} = await api("/api/crop_preview", {work: project.work, at: $("#cropAt").value, crop: cropValue()});
+    $("#cropResult").src = url + "&v=" + Date.now();
+  } catch (e) { alert(e.message); }
+};
+$("#cropSave").onclick = async () => {
+  const t = cropTarget();
+  if (!cropUi.rect) return alert("先拖出裁切範圍");
+  if (!t.name) return alert("請填新裁切的名稱");
+  try {
+    const crop = cropValue(), {config} = await api("/api/crop_save", {work: project.work, name: t.name, crop});
+    cropUi.state.presets[t.name] = crop;
+    cropUi.state.config = config;
+    fillCropNames(t.name + (t.pip ? "#pip" : ""));
+    $("#cropMsg").textContent = `已把「${t.name}」存進 ${config}，下次出片會用新的範圍。`;
+  } catch (e) { alert(e.message); }
+};
 
 // ------------------------------------------------------------- start
 (async () => {

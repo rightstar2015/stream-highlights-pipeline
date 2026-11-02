@@ -1,11 +1,11 @@
 {
   "streamer_name": "主播名稱（填這裡）",
-  "language": "zh",
+  "_language_profile_說明": "語言設定檔 languages/<名稱>.json：辨識語言、簡轉繁、關鍵字、字幕字數。這裡寫的項目會蓋過它。",
+  "language_profile": "zh-TW",
   "whisper": {
     "model": "large-v3",
     "device": "auto",
     "compute_type": "auto",
-    "initial_prompt": "以下是台灣中文遊戲直播的逐字稿。",
     "hotwords": [],
     "_refine_說明": "refine_transcript.py 重轉選定段落用的模型；refine_separate 為 true 時先用 Demucs 分離人聲",
     "refine_model": "large-v3",
@@ -13,7 +13,6 @@
     "_filter_說明": "過濾疑似幻覺的段落，判準同 Whisper 官方：重複度過高，或「模型認為沒人說話」且信心低。被濾掉的內容記在 WORK/transcript_dropped.txt。",
     "filter": {"compression_ratio_max": 2.4, "no_speech_prob_max": 0.6, "avg_logprob_min": -1.0}
   },
-  "chinese_convert": "s2twp",
   "_text_replacements_說明": "轉錄後固定替換常見錯字，例如主播名被聽成同音字：{\"小銘\": \"小明\"}",
   "text_replacements": {},
 
@@ -30,18 +29,6 @@
     "_weights_說明": "visual／scream／laugh 預設 0：實測對話題、金句型的精華沒有穩定幫助，只在候選的訊號列顯示給 Claude 參考。反應型頻道可試 0.3。",
     "weights": {"chat": 1.0, "keywords": 1.2, "audio": 0.8, "superchat": 0.5, "speech": 0.4,
                 "visual": 0, "scream": 0, "laugh": 0}
-  },
-
-  "chat_keywords": {
-    "草": 1.0, "www": 1.0, "笑死": 1.5, "XD": 1.0, "哈哈": 1.0, "哈哈哈": 1.2,
-    "？？？": 1.2, "???": 1.2, "好扯": 1.2, "靠北": 1.0, "靠杯": 1.0, "母湯": 1.0,
-    "可憐": 0.8, "8787": 1.0, "87": 0.6, "好可愛": 1.0, "可愛": 0.6, "暴斃": 1.2,
-    "神": 0.8, "太神": 1.2, "猛": 0.6, "欸": 0.5, "打給": 0.8, "切片": 1.5,
-    "剪": 0.8, "精華": 1.5, "LUL": 1.0, "KEKW": 1.0, "😂": 1.0, "🤣": 1.0
-  },
-  "speech_keywords": {
-    "等一下": 1.0, "不要": 0.8, "欸欸欸": 1.2, "啊啊啊": 1.2, "救命": 1.2,
-    "哈哈哈": 0.8, "什麼": 0.5, "怎麼可能": 1.0, "完了": 1.0, "幹嘛": 0.6
   },
 
   "vertical_layout": {

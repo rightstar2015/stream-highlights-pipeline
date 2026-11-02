@@ -29,11 +29,15 @@ def save_json(obj, path):
 
 
 def load_config(path=None):
-    """Load config.json, filling gaps from config.example.json."""
+    """Load config.json over its language profile (languages/*.json) over config.example.json."""
     base = load_json(SKILL_DIR / "config.example.json")
-    if path and Path(path).exists():
-        user = load_json(path)
-        _deep_merge(base, user)
+    user = load_json(path) if path and Path(path).exists() else {}
+    name = user.get("language_profile", base["language_profile"])
+    profile = SKILL_DIR / "languages" / f"{Path(name).name}.json"
+    if not profile.is_file():
+        sys.exit(f"[錯誤] 找不到語言設定檔：{profile}")
+    _deep_merge(base, load_json(profile))
+    _deep_merge(base, user)
     return base
 
 
