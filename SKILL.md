@@ -125,7 +125,7 @@ python scripts/export_premiere_xml.py --workdir WORK
 產出：
 - `WORK/clips/<id>_<標題>.mp4`：直式已套版型的 1080×1920；橫式為原解析度粗剪；響度統一 -14 LUFS
 - `WORK/clips/<id>_<標題>.srt`：繁體字幕（直式每句 ≤10 字、橫式 ≤12 字，單行、句尾不加標點）。在 Whisper 的句子邊界換行；長句有裝 `jieba` 時只在詞與詞之間切開。
-- `WORK/<直播檔名>_premiere.xml`：Premiere 匯入用（檔案 > 匯入）。橫式序列直接引用原始直播檔與剪點，可延伸修剪；直式序列放已套版型的 MP4。剪輯指示以序列標記呈現（放大臉、插入驚嚇卡…）。
+- `WORK/<直播檔名>_premiere.xml`：Premiere 匯入用（檔案 > 匯入）。橫式序列直接引用原始直播檔與剪點，可延伸修剪；直式序列放已套版型的 MP4。剪輯指示以序列標記呈現（放大臉、插入驚嚇卡…），00:00 的標記寫出要匯入的 SRT 檔名。使用者要延伸直式剪點時，加 `--vertical editable` 改用原始直播檔加裁切與版型。實驗功能（尚未在 Premiere 驗證，使用者要求才用）：config 的 `premiere.cards` 依 notes 文字放入片尾卡和轉場字卡。
 
 最後再寫 `WORK/publish_notes.md`：每支的 YouTube 標題（2–3 個選項）、說明欄、hashtag，風格見 selection_guide。
 

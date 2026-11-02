@@ -115,7 +115,7 @@ New-Item -ItemType Junction -Path "$HOME\.claude\skills\stream-highlights-pipeli
 
 ## 匯入 Premiere Pro
 
-- **XML**：工作資料夾裡的 `<直播檔名>_premiere.xml`，用「檔案 > 匯入」。每支片會變成一個序列；橫式序列直接引用原始直播檔，剪點可以延伸；直式序列放已套版型的 MP4。剪輯指示會變成序列標記。
+- **XML**：工作資料夾裡的 `<直播檔名>_premiere.xml`，用「檔案 > 匯入」。每支片會變成一個序列；橫式序列直接引用原始直播檔，剪點可以延伸；直式序列放已套版型的 MP4。剪輯指示會變成序列標記，00:00 的標記會寫出要匯入的 SRT 檔名。加 `--vertical editable` 可讓直式序列改用原始直播檔加裁切與版型，剪點可以延伸。實驗功能（尚未在 Premiere 驗證）：config 的 `premiere.cards` 依 notes 文字放入片尾卡和轉場字卡。
 - **字幕**：`clips/*.srt` 不在 XML 裡，要另外匯入後拖到序列上。
 - **離線媒體**：直播檔被移動過時會出現，對它按右鍵選「連結媒體」。
 

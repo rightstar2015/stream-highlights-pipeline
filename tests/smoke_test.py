@@ -425,9 +425,46 @@ def main():
     items = h.findall("media/video/track/clipitem")
     check([i.find("in").text for i in items] == ["2700", "5925"], "橫式剪點格數正確（30fps）")
     names = [m.find("name").text for m in h.findall("marker")]
-    check(names == ["放大臉"], f"標記點正確且剪掉的段落不出現（{names}）")
+    check(names == ["字幕：匯入 h01_打王全過程.srt", "放大臉"], f"標記點正確且剪掉的段落不出現（{names}）")
     v = [s for n, s in seqs.items() if n.startswith("v01")][0]
-    check(any("標題：我破防了" == m.find("name").text for m in v.findall("marker")), "直式標題標記")
+    start = [m.find("name").text for m in v.findall("marker") if m.find("in").text == "0"]
+    check(len(start) == 1 and "標題：我破防了" in start[0] and "字幕：匯入 v01_打王暴斃.srt" in start[0],
+          "直式 00:00 標記含標題與要匯入的字幕檔")
+
+    from export_premiere_xml import card_plan, place_region
+    pl = place_region([420, 0, 1000, 1080], 1920, 1080, (0, 328, 1080, 1168))
+    s = pl["scale"] / 100
+    left, right = pl["crop"]["left"] / 100 * 1920, 1920 - pl["crop"]["right"] / 100 * 1920
+    top, bottom = pl["crop"]["top"] / 100 * 1080, 1080 - pl["crop"]["bottom"] / 100 * 1080
+    edges = [pl["cx"] + (left - 960) * s, pl["cx"] + (right - 960) * s,
+             pl["cy"] + (top - 540) * s, pl["cy"] + (bottom - 540) * s]
+    check(all(abs(a - b) < 0.01 for a, b in zip(edges, [0, 1080, 328, 1496])),
+          f"可調整序列：裁切後剛好填滿內容視窗（{edges}）")
+    over, end = card_plan([(3.0, "轉場字卡"), (None, "接片尾"), (None, "轉場字卡"), (4.0, "放大臉")],
+                          [{"match": "轉場字卡", "place": "at"}, {"match": "接片尾", "place": "end"}], 10)
+    check([t for t, _ in over] == [3.0] and end["match"] == "接片尾", "字卡：剪掉的轉場不放，片尾不受時間影響")
+
+    card = OUT / "card.png"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=red:s=1080x1920",
+                    "-frames:v", "1", str(card)], check=True)
+    p3_cfg = OUT / "p3_config.json"
+    p3_cfg.write_text(json.dumps({"vertical_layout": {"template_png": str(card)}, "premiere": {
+        "vertical": "editable", "cards": [
+            {"match": "驚嚇卡", "file": str(card), "place": "at", "duration_sec": 2},
+            {"match": "放大臉", "file": str(card), "place": "end", "duration_sec": 5}]}}), encoding="utf-8")
+    p3_xml = OUT / "p3.xml"
+    sh("export_premiere_xml.py", "--workdir", W, "--config", p3_cfg, "--out", p3_xml)
+    p3 = {x.find("name").text[:3]: x for x in ET.parse(p3_xml).getroot().iter("sequence")}
+    pv = p3["v01"]
+    tracks = pv.findall("media/video/track")
+    check(pv.find("media/video/format/samplecharacteristics/width").text == "1080" and len(tracks) == 4,
+          f"可調整直式：1080 寬，主畫面、子母畫面、版型、字卡共 4 軌（{len(tracks)}）")
+    first = tracks[0].find("clipitem")
+    check(first.find("in").text == str(round(97.7 * 30)) and first.find("file/pathurl") is not None,
+          "可調整直式：主畫面用原始直播檔與原始進點")
+    check({e.text for e in first.iter("effectid")} == {"crop", "basic"}, "可調整直式：帶裁切與位置")
+    check(tracks[3].find("clipitem/start").text == str(round((103 - 97.7) * 30)), "字卡放在標記時間")
+    check(p3["h01"].find("duration").text == str(round(29.5 * 30) + 150), "片尾卡接在橫式最後，序列變長")
 
     sh("analyze_reference.py", "--out", OUT / "ref", W / "clips" / "v01_打王暴斃.mp4")
     rep = (OUT / "ref" / "report.md").read_text(encoding="utf-8")

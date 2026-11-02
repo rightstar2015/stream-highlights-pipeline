@@ -408,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             refine = [PY, "refine_transcript.py", "--workdir", work, *cfg, *pick]
             cmds.append(("高品質重轉字幕", refine, [[*refine, "--no-separate"]]))
         cmds += [("輸出影片與字幕", [PY, "cut_clips.py", "--workdir", work, *cfg, *pick]),
-                 ("Premiere XML", [PY, "export_premiere_xml.py", "--workdir", work])]
+                 ("Premiere XML", [PY, "export_premiere_xml.py", "--workdir", work, *cfg])]
         if not JOB.start("render", work, cmds):
             return self.send_json({"error": "已有工作在執行中"}, 409)
         self.send_json({"ok": True})
