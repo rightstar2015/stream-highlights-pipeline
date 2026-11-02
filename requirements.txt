@@ -1,5 +1,6 @@
-faster-whisper
-opencc-python-reimplemented
-numpy
-yt-dlp
-jieba
+faster-whisper==1.2.1
+opencc-python-reimplemented==0.1.7
+jieba==0.42.1
+numpy>=1.26,<3
+# YouTube changes often, so yt-dlp needs to stay current: a lower bound, not a pin
+yt-dlp>=2026.10.21

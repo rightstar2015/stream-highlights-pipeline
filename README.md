@@ -1,23 +1,28 @@
 # Stream Highlights Pipeline
 
+繁體中文 | [English](README.en.md)
+
 從長時間的 Vtuber 直播錄影找出精華，粗剪成直式短片和橫式精華，再帶進 Premiere Pro 精修。
 
 專為接案剪輯師設計：機器負責看完整場直播、挑候選、粗剪，**剪輯師決定要剪哪些片段，也負責最後的修飾**。系統一定會停在候選清單等你確認，不會自己出片。
+
+![Clip Review 審核頁：列出推薦片段的進出點、剪輯指示和提醒](docs/images/clip_review.png)
 
 ## 功能
 
 - **找候選**：整合逐字稿（faster-whisper＋選用的 Demucs 人聲分離）、聊天室重播、音量；另有畫面變化、尖叫／笑聲訊號可當參考
 - **AI 挑選（選用）**：由 Claude Code 讀逐字稿和截圖，以話題為單位推薦片段並寫好進出點
 - **Clip Review 介面**：本機網頁介面，可審核候選、改進出點和裁切、預覽，一鍵出片
+- **版型校正**：在直播畫面上拖框設定裁切，馬上看到 1080×1920 的結果
 - **輸出**：直式（1080×1920，可套版型）與橫式 MP4、繁體 SRT、響度 -14 LUFS，以及 **Premiere Pro 可匯入的 XML**
 - **說話者頭像補軌**：依 Premiere 中分軌的字卡，自動產生對應的頭像片段
 
-目前針對**台灣中文的遊戲直播與雜談**調整（關鍵字、簡轉繁、字幕斷句），其他語言要自行修改設定。
+目前針對**台灣中文的遊戲直播與雜談**調整。其他語言可以換語言設定檔，見[語言設定](#語言設定)。
 
 ## 環境需求
 
-- Windows 10／11（開發與測試環境；Clip Review 的「開啟資料夾」按鈕只支援 Windows）
-- Python 3.9 以上（開發使用 3.11）、[FFmpeg](https://ffmpeg.org/)
+- Windows 10／11（開發與實測環境）。macOS 和 Linux 有啟動腳本和自動測試，但還沒有用真實直播跑過
+- Python 3.11、[FFmpeg](https://ffmpeg.org/)
 - 建議有 NVIDIA 顯卡，用 CPU 轉錄長直播可能要好幾個小時
 - 選用：[Claude Code](https://claude.com/claude-code)（AI 挑選需要，會使用你自己帳號的額度）；Premiere Pro（開發時使用 2024 版）
 
@@ -26,7 +31,7 @@
 ```
 git clone https://github.com/rightstar2015/stream-highlights-pipeline.git
 cd stream-highlights-pipeline
-winget install Gyan.FFmpeg
+winget install Gyan.FFmpeg      # macOS：brew install ffmpeg；Linux：sudo apt install ffmpeg
 pip install -r requirements.txt
 ```
 
@@ -54,7 +59,11 @@ python scripts/setup_check.py
 
 1. **設定檔**：把 `config.example.json` 複製到存放直播的資料夾，改名 `config.json`，填主播名、常被聽錯的詞（`text_replacements`）。只要寫跟預設不同的項目。
 2. **風格檔**：把 `references/client_style.example.md` 複製成 `references/client_style.md`，填入你的頻道版型、長度和選題偏好。這個檔案不會進 git。
-3. **直式版型**：準備 1080×1920、中間透明的 PNG，填進 `vertical_layout.template_png`，再校正 `crop_presets`。可以用下面的指令產生附格線的畫面來量座標：
+3. **直式版型**：準備 1080×1920、中間透明的 PNG，填進 `vertical_layout.template_png`，再到 Clip Review 的「版型校正」設定裁切：選一個裁切、在畫面上拖框、按「預覽結果」，確認後存進設定檔。設定檔只有這個裁切會被改動。
+
+   ![版型校正：左邊在直播畫面上拖框，右邊是套用後的直式結果](docs/images/layout_wizard.png)
+
+   不用介面時，可以產生附格線的畫面來量座標：
 
    ```
    python scripts/frames.py --video 直播.mp4 --workdir 工作資料夾 --calibrate 00:30:00
@@ -75,7 +84,7 @@ D:\直播\
 
 ### 用 Clip Review（圖形介面）
 
-雙擊 `start_clip_review.bat`，瀏覽器會開啟 http://127.0.0.1:8765（只在本機執行）。
+雙擊 `start_clip_review.bat`（macOS／Linux 執行 `./start_clip_review.sh`），瀏覽器會開啟 http://127.0.0.1:8765（只在本機執行）。
 
 | 步驟 | 誰做 | 內容 |
 |---|---|---|
@@ -94,7 +103,7 @@ D:\直播\
 python scripts/pipeline.py --video 直播.mp4 --url <YouTube網址> --auto-select
 ```
 
-已完成的步驟會跳過，可以中斷後續跑；換了直播檔或分析範圍時會提醒，要重跑請加 `--force`。要整晚排程，可以參考 `run_overnight.bat`。之後在 Clip Review 審核，或自己寫 `selections.json`，再執行：
+已完成的步驟會跳過，可以中斷後續跑；換了直播檔或分析範圍時會提醒，要重跑請加 `--force`。要整晚排程，可以參考 `run_overnight.bat`（macOS／Linux 是 `run_overnight.sh`）。之後在 Clip Review 審核，或自己寫 `selections.json`，再執行：
 
 ```
 python scripts/validate_selections.py --workdir 工作資料夾
@@ -110,6 +119,8 @@ python scripts/export_premiere_xml.py --workdir 工作資料夾
 ```
 New-Item -ItemType Junction -Path "$HOME\.claude\skills\stream-highlights-pipeline" -Target "<這個資料夾的完整路徑>"
 ```
+
+macOS／Linux 用 `ln -s "<這個資料夾的完整路徑>" ~/.claude/skills/stream-highlights-pipeline`。
 
 重新開啟 Claude Code，說「幫我剪這場直播的精華」並提供直播檔路徑。完整流程見 [SKILL.md](SKILL.md)。
 
@@ -140,18 +151,26 @@ python scripts/diarize.py --workdir 工作資料夾 --label
 
 會產生 `clips/<片名>_說話者.srt`。在 `config.json` 加上 `"speakers": {"SPEAKER_01": "名字"}` 就會顯示名字。
 
+## 語言設定
+
+跟語言有關的設定都在 `languages/<名稱>.json`：Whisper 的語言和提示、簡轉繁、聊天室和語音關鍵字、字幕字數。在 `config.json` 寫 `"language_profile": "en"` 就能切換；要加新語言，複製一份檔案翻譯關鍵字即可。你自己在 `config.json` 寫的項目會蓋過語言設定檔。
+
+目前有 `zh-TW`（預設）和 `en`。`en` 只是起點，還沒有用真實直播測過；介面和 AI 挑選的提示仍然是中文。
+
 ## 測試
 
 ```
 python tests/smoke_test.py
 ```
 
-使用合成素材做端對端測試，只需要 FFmpeg 和 numpy，約 2–3 分鐘，不涵蓋 Whisper 和 Demucs 本身。
+使用合成素材做端對端測試，只需要 FFmpeg 和 numpy，約 2–3 分鐘，不涵蓋 Whisper 和 Demucs 本身。GitHub Actions 會在 Windows、Linux、macOS 上自動執行。
+
+想參與開發請看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 已知限制
 
 - 主要在單一頻道的真實直播上驗證過，其他頻道的畫面配置要自己校正裁切座標。
-- `fetch_chat.py --url`（用 yt-dlp 下載聊天室）尚未在真實環境完整驗證；若失敗，可以先下載 `live_chat.json` 再用 `--chat-file` 指定。
+- `fetch_chat.py --url` 依賴 yt-dlp，YouTube 改版時可能失敗，請先更新 yt-dlp；還是不行時，可以先下載 `live_chat.json` 再用 `--chat-file` 指定。
 - 畫面和尖叫／笑聲訊號是啟發式做法，實測對話題型精華的排名沒有穩定幫助，所以預設權重為 0，只當參考。
 - Whisper 可能聽錯字，特別是配樂大聲或專有名詞多的段落，字幕仍需人工校對。
 - Premiere 的文字圖層和 MOGRT 無法透過 XML 來回，說話者頭像工具因此只輸出新增的頭像片段。

@@ -212,8 +212,8 @@ def main():
     # background job: stop kills the whole process tree, refine-style steps fall back and carry on
     slow = [PY, "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"]
     fail = [PY, "-c", "raise SystemExit(3)"]
-    def wait_job():
-        for _ in range(100):
+    def wait_job(seconds=10):
+        for _ in range(seconds * 10):
             if not studio.JOB.snapshot()["running"]:
                 return studio.JOB.snapshot()
             time.sleep(0.1)
@@ -231,6 +231,60 @@ def main():
                       "last_job": {"running": True, "kind": "analyze", "work": str(W2), "events": [], "log": []}}, studio.SETTINGS)
     studio.JOB.restore()
     check(studio.JOB.snapshot()["interrupted"], "工作：重開伺服器後會顯示上次沒做完")
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        return json.loads(urllib.request.urlopen(req).read())
+
+    # analyze -> preview -> render through the API, as the page does it
+    W4 = OUT / "api"
+    W4.mkdir()
+    shutil.copy(W / "transcript.json", W4 / "transcript.json")
+    api_cfg = OUT / "api_config.json"
+    api_cfg.write_text(json.dumps({"streamer_name": "測試主播", "text_replacements": {"甲": "乙"}}, ensure_ascii=False), encoding="utf-8")
+    check(post("/api/analyze", {"video": str(video), "work": str(W4), "config": str(api_cfg),
+                                "chat_file": str(OUT / "chat.live_chat.json")})["ok"], "API 分析：可以啟動")
+    check(status("/api/analyze", {"video": str(video), "work": str(W4)}) == 409
+          and json.loads((W4 / "studio.json").read_text(encoding="utf-8"))["config"] == str(api_cfg),
+          "API 分析：進行中會拒絕，也不會改掉專案設定")
+    j = wait_job(180)
+    check(j["rc"] == 0 and (W4 / "candidates.json").exists(), f"API 分析：跑完產生候選（{j['rc']}）")
+    url = post("/api/preview", {"work": str(W4), "ranges": [[10, 12], [20, 21]]})["url"]
+    pv = urllib.request.urlopen(base + url).read()
+    pv_file = OUT / "pv.mp4"
+    pv_file.write_bytes(pv)
+    check(abs(probe(pv_file)[2] - 3) < 0.5, "API 預覽：兩段接起來約 3 秒")
+    clip = {"id": "v09", "format": "vertical", "title": "API測試", "segments": [{"in": 100, "out": 108, "crop": "game"}]}
+    check(status("/api/render", {"work": str(W4), "selections": {"clips": []}}) == 400, "API 出片：沒勾選會擋下")
+    check(status("/api/render", {"work": str(W4), "selections": {"clips": [
+        dict(clip, segments=[{"in": 100, "out": 9999}])]}}) == 400, "API 出片：超出直播長度會擋下")
+    check(post("/api/render", {"work": str(W4), "selections": {"clips": [clip]}})["ok"], "API 出片：可以啟動")
+    j = wait_job(120)
+    check(j["rc"] == 0 and (W4 / "clips" / "v09_API測試.mp4").exists() and list(W4.glob("*_premiere.xml")),
+          f"API 出片：產生 MP4 和 XML（{j['rc']}）")
+
+    # layout calibration
+    check(status("/api/crop_state", {"work": str(OUT)}) == 403, "版型校正：不接受未開啟的資料夾")
+    cs = post("/api/crop_state", {"work": str(W4)})
+    check(cs["width"] == 1920 and "game" in cs["presets"] and cs["config"] == str(api_cfg), "版型校正：讀得到直播尺寸和裁切")
+    frame = urllib.request.urlopen(base + post("/api/crop_frame", {"work": str(W4), "at": "1:40"})["url"]).read()
+    check(frame[:2] == b"\xff\xd8", "版型校正：可以取得畫面")
+    res = OUT / "crop_preview.jpg"
+    res.write_bytes(urllib.request.urlopen(base + post("/api/crop_preview", {
+        "work": str(W4), "at": 100, "crop": [420, 0, 1000, 1080]})["url"]).read())
+    check(probe(res)[:2] == (1080, 1920), "版型校正：預覽是 1080x1920")
+    check(status("/api/crop_preview", {"work": str(W4), "at": 100, "crop": [0, 0, 0, 0]}) == 400, "版型校正：不接受空的範圍")
+    check(status("/api/crop_save", {"work": str(W4), "name": "../x", "crop": [0, 0, 10, 10]}) == 400, "版型校正：不接受奇怪的名稱")
+    post("/api/crop_save", {"work": str(W4), "name": "game", "crop": [400, 10, 1000, 1080]})
+    post("/api/crop_save", {"work": str(W4), "name": "game_pip", "crop": {
+        "region": [1, 2, 300, 300], "pip": {"region": [5, 6, 100, 100], "at": [0, 0, 380]}}})
+    raw = json.loads(api_cfg.read_text(encoding="utf-8"))
+    merged = studio.load_config(api_cfg)["vertical_layout"]["crop_presets"]
+    check(raw["streamer_name"] == "測試主播" and raw["text_replacements"] == {"甲": "乙"} and "output_size" not in raw["vertical_layout"],
+          "版型校正：只改裁切，設定檔其他內容不動")
+    check(merged["game"] == [400, 10, 1000, 1080] and merged["game_pip"]["pip"]["region"] == [5, 6, 100, 100]
+          and "face" in merged, "版型校正：存檔後出片讀得到新範圍，其他裁切還在")
     srv.shutdown()
 
     # headless picks: Claude's printed result is validated before anything is written
@@ -443,6 +497,47 @@ def main():
     over, end = card_plan([(3.0, "轉場字卡"), (None, "接片尾"), (None, "轉場字卡"), (4.0, "放大臉")],
                           [{"match": "轉場字卡", "place": "at"}, {"match": "接片尾", "place": "end"}], 10)
     check([t for t, _ in over] == [3.0] and end["match"] == "接片尾", "字卡：剪掉的轉場不放，片尾不受時間影響")
+
+    # avatar_tracks: cards on V2 become avatars on V3, close cards merge, excluded ones drop
+    export = ET.Element("xmeml", version="4")
+    exq = ET.SubElement(export, "sequence")
+    ET.SubElement(exq, "name").text = "匯出序列"
+    rate = ET.SubElement(exq, "rate")
+    ET.SubElement(rate, "timebase").text = "30"
+    ET.SubElement(rate, "ntsc").text = "FALSE"
+    exv = ET.SubElement(ET.SubElement(exq, "media"), "video")
+    sc = ET.SubElement(ET.SubElement(exv, "format"), "samplecharacteristics")
+    ET.SubElement(sc, "width").text = "1920"
+    ET.SubElement(sc, "height").text = "1080"
+    ex_tracks = [ET.SubElement(exv, "track") for _ in range(3)]
+    for k, (a, b) in enumerate([(30, 60), (65, 90), (300, 330)]):
+        gi = ET.SubElement(ex_tracks[1], "generatoritem")
+        ET.SubElement(gi, "start").text = str(a)
+        ET.SubElement(gi, "end").text = str(b)
+    avatar = OUT / "avatar.png"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=blue:s=1920x1080", "-frames:v", "1", str(avatar)], check=True)
+    ex_xml = OUT / "export.xml"
+    ET.ElementTree(export).write(ex_xml, encoding="utf-8")
+
+    def avatars(*extra):
+        out = OUT / "avatars.xml"
+        sh("avatar_tracks.py", "--xml", ex_xml, "--map", f"V2=V3:{avatar}", "--out", out, *extra)
+        items = ET.parse(out).getroot().findall("sequence/media/video/track")[2].findall("clipitem")
+        return [(i.find("enabled").text, int(i.find("start").text), int(i.find("end").text)) for i in items]
+    check(avatars() == [("FALSE", 0, 1), ("TRUE", 30, 90), ("TRUE", 300, 330)],
+          "頭像：相近的字卡合併，00:00 有停用的對齊物件")
+    check(avatars("--exclude", "300-330") == [("FALSE", 0, 1), ("TRUE", 30, 90)], "頭像：排除的字卡不放")
+
+    # language profiles
+    from common import load_config
+    zh = load_config()
+    check(zh["language"] == "zh" and zh["chinese_convert"] == "s2twp" and "笑死" in zh["chat_keywords"]
+          and zh["whisper"]["model"] == "large-v3", "語言設定：預設是台灣中文，其他預設還在")
+    lang_cfg = OUT / "lang.json"
+    lang_cfg.write_text(json.dumps({"language_profile": "en", "chat_keywords": {"gg": 1.0}}), encoding="utf-8")
+    en = load_config(lang_cfg)
+    check(en["language"] == "en" and not en["chinese_convert"] and "lmao" in en["chat_keywords"] and "gg" in en["chat_keywords"]
+          and "笑死" not in en["chat_keywords"], "語言設定：可以換語言，使用者設定優先")
 
     card = OUT / "card.png"
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=red:s=1080x1920",

@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -27,8 +28,8 @@ SKILL = APP.parent
 SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from common import (default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
-                    probe, save_json, work_paths)
-from cut_clips import safe_name  # noqa: E402
+                    parse_ts, probe, save_json, work_paths)
+from cut_clips import resolve_template, safe_name, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
 
@@ -89,7 +90,7 @@ class Job:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
         else:
-            self.proc.kill()
+            os.killpg(pid, signal.SIGKILL)
         return True
 
     def start(self, kind, work, cmds):
@@ -133,7 +134,8 @@ class Job:
 
     def _exec(self, argv):
         p = subprocess.Popen(argv, cwd=SCRIPTS, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, encoding="utf-8", errors="replace", env=ENV)
+                             text=True, encoding="utf-8", errors="replace", env=ENV,
+                             start_new_session=os.name != "nt")  # own process group, so stop() reaches children
         with self.lock:
             self.proc = p
         for line in p.stdout:
@@ -267,6 +269,53 @@ def known_project(work):
     return any(p == Path(r["work"]).resolve() for r in settings().get("recent", []))
 
 
+def open_folder(path):
+    if os.name == "nt":
+        os.startfile(path)
+    else:
+        subprocess.run(["open" if sys.platform == "darwin" else "xdg-open", path], check=True)
+
+
+# ---------------------------------------------------------------- layout calibration
+
+def clean_region(r):
+    """[x, y, w, h] of whole pixels, or None when it isn't a usable rectangle."""
+    if not (isinstance(r, list) and len(r) == 4 and all(isinstance(v, (int, float)) for v in r)):
+        return None
+    x, y, w, h = (int(round(v)) for v in r)
+    return [x, y, w, h] if x >= 0 and y >= 0 and w >= 2 and h >= 2 else None
+
+
+def clean_crop(c):
+    """A crop preset from a request: [x, y, w, h], or {"region": ..., "pip": {"region": ..., "at": [x, y, w]}}."""
+    if isinstance(c, list):
+        return clean_region(c)
+    if not isinstance(c, dict) or not clean_region(c.get("region")):
+        return None
+    out = {"region": clean_region(c["region"])}
+    pip = c.get("pip")
+    if pip:
+        at = pip.get("at")
+        if not (clean_region(pip.get("region")) and isinstance(at, list) and len(at) == 3
+                and all(isinstance(v, (int, float)) and v >= 0 for v in at)):
+            return None
+        out["pip"] = {"region": clean_region(pip["region"]), "at": [int(v) for v in at]}
+    return out
+
+
+def project_config(paths, meta):
+    """Config file of a project: the recorded one, one found nearby, or None."""
+    src = project_source(paths, meta)
+    return meta.get("config") or find_config(paths["dir"], *([Path(src).parent] if src else []))
+
+
+def save_crop(config_path, name, crop):
+    """Change one preset in the user's own config file; everything else in it stays."""
+    raw = load_json(config_path) if Path(config_path).exists() else {}
+    raw.setdefault("vertical_layout", {}).setdefault("crop_presets", {})[name] = crop
+    save_json(raw, config_path)
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
@@ -342,11 +391,13 @@ class Handler(BaseHTTPRequestHandler):
             handler = {"/api/analyze": self.analyze, "/api/render": self.render,
                        "/api/preview": self.preview, "/api/pick": self.pick,
                        "/api/open": self.open_path, "/api/review_state": self.review_state,
-                       "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop}.get(u.path)
+                       "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop,
+                       "/api/crop_state": self.crop_state, "/api/crop_frame": self.crop_frame,
+                       "/api/crop_preview": self.crop_preview, "/api/crop_save": self.crop_save}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
-            if (u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap")
-                    and not known_project(data.get("work", ""))):
+            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap")
+                 or u.path.startswith("/api/crop_")) and not known_project(data.get("work", ""))):
                 return self.send_json({"error": "不是已開啟的專案"}, 403)
             return handler(data)
         except Exception as e:  # report to the page instead of dropping the connection
@@ -359,6 +410,8 @@ class Handler(BaseHTTPRequestHandler):
         work = Path(d.get("work") or default_workdir(video)).resolve()
         if work.parent == work:
             return self.send_json({"error": "工作資料夾不能是磁碟根目錄"}, 400)
+        if JOB.snapshot()["running"]:  # before touching studio.json: a refused request must not change the project
+            return self.send_json({"error": "已有工作在執行中"}, 409)
         paths = work_paths(work)
         # resolve the config here too, so the render step uses the same one as the analysis
         meta = {"video": str(video), "config": d.get("config") or find_config(work, video.parent)}
@@ -444,13 +497,70 @@ class Handler(BaseHTTPRequestHandler):
         save_json({"clips": d["clips"]}, work_paths(d["work"])["dir"] / REVIEW_STATE)
         self.send_json({"ok": True})
 
+    def crop_context(self, d):
+        """(paths, stream path, stream info, vertical layout) of a project; the stream never comes from a request."""
+        paths = work_paths(d["work"])
+        meta = studio_meta(paths)
+        src = project_source(paths, meta)
+        if not src or not Path(src).is_file():
+            raise ValueError("找不到這個專案的直播檔")
+        return paths, src, probe(src), load_config(project_config(paths, meta))["vertical_layout"]
+
+    def crop_state(self, d):
+        paths, _, info, lay = self.crop_context(d)
+        cands = load_json(paths["candidates"])["candidates"] if paths["candidates"].exists() else []
+        self.send_json({"width": info["width"], "height": info["height"], "duration": info["duration"],
+                        "presets": lay.get("crop_presets", {}), "content_box": lay["content_box"],
+                        "template_mode": lay.get("mode", "template") == "template",
+                        "has_template": bool(resolve_template(lay)),
+                        "config": project_config(paths, studio_meta(paths)),
+                        "at": cands[0]["peak"] if cands else min(60, info["duration"] / 2)})
+
+    def crop_frame(self, d):
+        paths, src, info, _ = self.crop_context(d)
+        at = min(max(0.0, parse_ts(d["at"])), max(0.0, info["duration"] - 1))
+        out = paths["dir"] / "previews" / "crop_frame.jpg"
+        out.parent.mkdir(exist_ok=True)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
+                        "-q:v", "3", str(out)], check=True, capture_output=True)
+        self.send_json({"url": "/file?path=" + quote(str(out))})
+
+    def crop_preview(self, d):
+        crop = clean_crop(d.get("crop"))
+        if crop is None:
+            return self.send_json({"error": "裁切範圍不正確"}, 400)
+        paths, src, info, lay = self.crop_context(d)
+        at = min(max(0.0, parse_ts(d["at"])), max(0.0, info["duration"] - 1))
+        tpl = resolve_template(lay)
+        out = paths["dir"] / "previews" / "crop_preview.jpg"
+        out.parent.mkdir(exist_ok=True)
+        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src]
+        if tpl:
+            cmd += ["-loop", "1", "-i", str(tpl)]
+        cmd += ["-filter_complex", vertical_filter(lay, info["width"], info["height"], crop, bool(tpl)),
+                "-map", "[out]", "-frames:v", "1", "-q:v", "3", str(out)]
+        subprocess.run(cmd, check=True, capture_output=True)
+        self.send_json({"url": "/file?path=" + quote(str(out))})
+
+    def crop_save(self, d):
+        name, crop = str(d.get("name", "")).strip(), clean_crop(d.get("crop"))
+        if not re.fullmatch(r"[\w-]{1,30}", name) or crop is None:
+            return self.send_json({"error": "名稱或裁切範圍不正確（名稱只能有文字、數字、底線、連字號）"}, 400)
+        paths, src, _, _ = self.crop_context(d)
+        meta = studio_meta(paths)
+        config = project_config(paths, meta) or str(Path(src).parent / "config.json")
+        save_crop(config, name, crop)
+        if meta.get("config") != config:
+            save_json({**meta, "video": project_source(paths, meta), "config": config}, paths["dir"] / "studio.json")
+        self.send_json({"ok": True, "config": config})
+
     def pick(self, d):
         self.send_json({"path": pick_path(d.get("kind", "file"))})
 
     def open_path(self, d):
         if not allowed_file(d.get("path", "")):
             return self.send_json({"error": "不允許的檔案"}, 403)
-        os.startfile(str(Path(d["path"]).resolve().parent))  # folders only; Windows only, like the rest of the workflow
+        open_folder(str(Path(d["path"]).resolve().parent))  # folders only
         self.send_json({"ok": True})
 
     def send_file(self, p):

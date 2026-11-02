@@ -18,12 +18,6 @@
 
 ## P4：讓其他人更容易使用（公開專案）
 
-- [ ] **README 加上截圖或短片**：使用虛構素材，不要出現真實頻道內容。
-- [ ] **實際測試 `fetch_chat.py --url`**：目前唯一尚未在真實環境驗證的主要步驟。
-- [ ] **版型校正精靈**：在 Clip Review 內拖框設定 `crop_presets`，不用手動讀格線圖。
-- [ ] **GitHub Actions**：在 Windows 上自動跑 `tests/smoke_test.py`。
-- [ ] **補測試**：`avatar_tracks.py` 目前沒有測試（已確認）；Clip Review 的 analyze、render、preview API 也沒有。
-- [ ] **鎖定相依版本**：`requirements.txt` 目前沒有指定版本。
-- [ ] **跨平台**：`.bat` 和 `os.startfile` 只支援 Windows，補上 macOS／Linux 的啟動方式。
-- [ ] **英文 README 與其他語言設定**：把關鍵字和簡轉繁獨立成語言設定檔。
-- [ ] **貢獻指南與 issue 範本**：提醒回報問題時不要附上未授權的直播內容或個人路徑。
+- [ ] **確認 CI 在三個平台都通過**：Linux、macOS 只改了程式，還沒實際跑過；推上 GitHub 後看第一次結果。
+- [ ] **用真實英文直播測 `languages/en.json`**：目前只確認設定能載入，關鍵字和字幕字數都還沒驗證。
+- [ ] **介面和 AI 挑選提示的多語言**：目前都是中文，語言設定檔還沒有涵蓋。
