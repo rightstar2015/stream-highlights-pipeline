@@ -71,6 +71,7 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 - `transcribe.py` 用 large-v3-turbo 轉整場 6.4 分鐘。人聲分離（torch 2.11 cu128＋demucs 4.1.0）3 分鐘音訊約 15 秒；在配樂重的 10 分鐘把幻覺從 3 次降到 0 次，而且更快。
 - `refine_transcript.py`：37 分鐘素材約 3.5 分鐘。`fetch_chat.py --file` 正常。
 - 橫式 `cut_clips.py`＋`export_premiere_xml.py`：Premiere 2024 可匯入。
+- 直式序列：MP4 版可匯入。`--vertical editable`（Center 以來源尺寸換算、Crop 以百分比，找不到規格，靠實測確認）用一支 60fps 三段跳剪加版型 PNG 對照 MP4，畫面一致；沒測過子母畫面的真實素材，所以預設仍是 MP4。
 - `vocal_events.py` 整場 45 秒；`visual_events.py` 整場 34 分鐘（解碼 1080p 是瓶頸）。
 - 拿 10 支人工選定的成品當正解：visual／scream／laugh 讓名次有升有降，沒有穩定進步，所以預設權重 0，只顯示給 Claude 參考。稀疏訊號用 `tail_z`（robust_z 會因 MAD≈0 飽和）。
 - `pipeline.py --auto-select`：約 6–7 分鐘。不看過去選擇時，推薦片段對應到 5/5 支 Shorts、4/5 支橫式。推薦的橫式常超過 4 分鐘，但都有寫理由。
@@ -84,11 +85,10 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
-尚未在真實環境驗證：`fetch_chat.py --url`；`suggest_terms.py`（還沒有真實校正稿）。
+尚未在真實環境驗證：`fetch_chat.py --url`；`suggest_terms.py`（還沒有真實校正稿）；`export_premiere_xml.py` 的 `premiere.cards`（只有 smoke test 檢查 XML 內容，還沒匯入 Premiere）。
 
 ## 轉錄的踩坑紀錄
 
 - 重轉時關掉 VAD 會讓 Whisper 把 initial_prompt 當字幕吐出，並吞掉後面 20–40 秒，所以 refine 保留 VAD、預設不帶 prompt／hotwords；另有「重轉字數 < 原本一半就保留原文」的保險。
 - `hotwords` 放太多會增加幻覺，保持 1–3 個。
 - `whisper.filter` 依 no_speech_prob／compression_ratio／avg_logprob 過濾幻覺，被濾掉的記在 `WORK/transcript_dropped.txt`。實測兩段各 30 分鐘的雜談都沒濾到東西（無誤殺，但實際效果只由單元測試驗證），配樂重的遊戲直播還沒測。
-- 片尾卡、轉場字卡目前只在 notes 標示，未來可以讓 XML 直接帶入素材檔。

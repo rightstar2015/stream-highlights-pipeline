@@ -75,6 +75,9 @@
     ]
   },
 
+  "_premiere_說明": "export_premiere_xml.py：vertical 為 editable 時，直式序列改用原始直播檔加裁切與版型（只限 template）。cards：notes 含 match 文字時放入素材，place 是 at（疊在該時間）或 end（接在最後）；相對路徑以專案資料夾為準。例如 {\"match\": \"接片尾\", \"file\": \"素材/片尾.mp4\", \"place\": \"end\"}",
+  "premiere": {"vertical": "mp4", "cards": []},
+
   "_auto_select_說明": "pipeline.py --auto-select 最多推薦幾支；超過時依信心留下較好的。",
   "auto_select": {"max_vertical": 8, "max_horizontal": 5},
 
