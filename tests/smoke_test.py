@@ -264,6 +264,68 @@ def main():
                                     result({"clips": [dict(good, segments=[[20, 10]])]}))),
           "自動挑選：不合格的結果都不會存檔")
 
+    # low-confidence transcript filter
+    from types import SimpleNamespace as NS
+    from transcribe import low_confidence
+    lim = {"compression_ratio_max": 2.4, "no_speech_prob_max": 0.6, "avg_logprob_min": -1.0}
+    seg_ok = NS(compression_ratio=1.5, no_speech_prob=0.9, avg_logprob=-0.3)
+    check(low_confidence(seg_ok, lim) is None, "幻覺過濾：沒人說話機率高但信心夠，保留")
+    check(low_confidence(NS(compression_ratio=3.0, no_speech_prob=0, avg_logprob=0), lim)
+          and low_confidence(NS(compression_ratio=1, no_speech_prob=0.9, avg_logprob=-1.5), lim),
+          "幻覺過濾：重複度過高、或沒人說話且信心低，都濾掉")
+    check(low_confidence(NS(compression_ratio=9, no_speech_prob=1, avg_logprob=-9), None) is None, "幻覺過濾：可以關閉")
+
+    # correction log
+    from learn_feedback import compare, record
+    clip = lambda i, a, b, **k: {"id": i, "format": "vertical", "title": i, "segments": [[a, b]], **k}
+    res = compare([clip("a", 100, 130), clip("b", 200, 230), clip("c", 300, 330, title="被刪的", confidence="低")],
+                  [clip("x", 103, 128, title="改名"), clip("b", 200, 230), clip("y", 900, 930)])
+    check(len(res["kept"]) == 2 and [c["title"] for c in res["removed"]] == ["被刪的"] and [c["id"] for c in res["added"]] == ["y"]
+          and any(k["in_shift"] == 3 and k["out_shift"] == -2 for k in res["kept"]), "修改紀錄：分得出保留、刪除、新增和剪點偏移")
+    W4 = OUT / "fb" / "20260101_精華"
+    W4.mkdir(parents=True)
+    (W4 / "selections.draft.json").write_text(json.dumps({"clips": [clip("a", 100, 130)]}), encoding="utf-8")
+    (W4 / "selections.json").write_text(json.dumps({"clips": [clip("a", 102, 130)]}), encoding="utf-8")
+    flog = OUT / "fb" / "log.md"
+    record(W4, flog)
+    (W4 / "selections.json").write_text(json.dumps({"clips": []}), encoding="utf-8")
+    record(W4, flog)
+    text = flog.read_text(encoding="utf-8")
+    check(text.count("## 20260101_精華") == 1 and "保留 0、刪除 1" in text, "修改紀錄：同一個專案重跑時更新，不重複")
+
+    # term suggestions
+    from suggest_terms import srt_text, suggest
+    (OUT / "o.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\n今天打小銘王\n", encoding="utf-8-sig")
+    check(srt_text(OUT / "o.srt") == "今天打小銘王", "專有名詞：SRT 只取文字")
+    pairs = [("今天打小銘王很難", "今天打小明王很難"), ("明天再打小銘王吧", "明天再打小明王吧"), ("我吃蘋果了", "我吃香蕉了")]
+    check(suggest(pairs) == {"小銘": "小明"}, f"專有名詞：只建議重複出現的修改（{suggest(pairs)}）")
+
+    # chat offset hint
+    from signals import estimate_chat_shift, offset_hint
+    rng = np.random.default_rng(1)
+    loud_s = np.zeros(4000)
+    bursts = rng.integers(0, 3900, 60)
+    for b in bursts:
+        loud_s[b:b + 15] = 10
+    chat_s = np.zeros(4000)
+    for b in bursts:
+        if b + 70 < 4000:
+            chat_s[b + 60:b + 70] += 5
+    check(estimate_chat_shift(chat_s, loud_s)[0] in range(55, 66), f"時間差：估得出聊天室晚 60 秒（{estimate_chat_shift(chat_s, loud_s)}）")
+    check("chat_offset_sec" in offset_hint([{"t": 1}], chat_s, loud_s, 0, 4000), "時間差：差很多時提示")
+    check(offset_hint([{"t": 1}], np.roll(chat_s, -55), loud_s, 0, 4000) is None, "時間差：對齊時不提示")
+    check("多了" in offset_hint([{"t": 4100}], chat_s * 0, loud_s, 0, 4000), "時間差：聊天室比影片長時提示")
+    check(estimate_chat_shift(np.zeros(4000), loud_s) is None, "時間差：沒有留言就不猜")
+
+    # evaluation tool
+    sys.path.insert(0, str(HERE.parent / "tools"))
+    from eval_selections import eval_candidates, eval_pred
+    tr = [{"id": "t1", "segments": [[100, 120]]}, {"id": "t2", "segments": [[500, 520]]}]
+    ev = eval_pred(tr, [{"id": "p", "segments": [[100, 110], [105, 120]]}, {"id": "q", "segments": [[800, 820]]}])
+    check(ev["rows"][0]["coverage"] == 1 and ev["rows"][1]["coverage"] == 0 and ev["hit"] == 1 and ev["precision"] == 0.5,
+          "評估工具：重疊不重複計算，涵蓋率和精準度正確")
+    check(eval_candidates(tr, [{"peak": 105, "rank": 3}, {"peak": 900, "rank": 1}])[0]["best_rank"] == 3, "評估工具：候選名次正確")
+
     from validate_selections import snap_range, validate
     words = [{"start": 10 + i * 0.5, "end": 10.4 + i * 0.5, "word": "字"} for i in range(40)]
     sent = [{"start": 10.0, "end": 29.9, "text": "長句", "words": words}]

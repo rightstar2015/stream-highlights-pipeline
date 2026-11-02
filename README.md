@@ -119,6 +119,12 @@ New-Item -ItemType Junction -Path "$HOME\.claude\skills\stream-highlights-pipeli
 - **字幕**：`clips/*.srt` 不在 XML 裡，要另外匯入後拖到序列上。
 - **離線媒體**：直播檔被移動過時會出現，對它按右鍵選「連結媒體」。
 
+## 其他工具
+
+- `python tools/eval_selections.py --truth 人工選片.json --pred selections.draft.json`：評估推薦和人工選片的重疊。
+- `python scripts/suggest_terms.py --original 原.srt --corrected 校正.srt`：從校正過的字幕找出固定會錯的詞。
+- 出片時會把你對 Claude 推薦的修改記在 `references/feedback_log.md`（只留在本機），下次挑選會參考。
+
 ## 測試
 
 ```

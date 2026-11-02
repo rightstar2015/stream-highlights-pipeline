@@ -29,6 +29,7 @@ sys.path.insert(0, str(SCRIPTS))
 from common import (default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
                     probe, save_json, work_paths)
 from cut_clips import safe_name  # noqa: E402
+from learn_feedback import record as record_feedback  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
 
 PY = sys.executable
@@ -396,6 +397,10 @@ class Handler(BaseHTTPRequestHandler):
         if blocked:
             return self.send_json({"error": "；".join(f"{i['id']}：{i['msg']}" for i in blocked)}, 400)
         save_json(sel, paths["selections"])
+        try:
+            record_feedback(work)
+        except (KeyError, TypeError, ValueError, OSError) as e:  # learning must never block a render
+            print(f"[提示] 沒有記錄到修改紀錄：{e}")
         cfg = ["--config", meta["config"]] if meta.get("config") else []
         pick = ["--only", *only] if only else []
         cmds = []

@@ -76,7 +76,7 @@ python scripts/signals.py --workdir WORK --config config.json
 
 ## 3. 挑選（Claude 的主要工作）
 
-先讀 `references/client_style.md`（甲方偏好，優先；沒有這個檔案就讀 `references/client_style.example.md`，並提醒使用者建立自己的版本）和 `references/selection_guide.md`。
+`references/feedback_log.md` 如果存在，也要讀：那是使用者過去對推薦的修改紀錄，用來調整偏好。先讀 `references/client_style.md`（甲方偏好，優先；沒有這個檔案就讀 `references/client_style.example.md`，並提醒使用者建立自己的版本）和 `references/selection_guide.md`。
 
 ### 甲方指定片段（有的話先做）
 
@@ -106,7 +106,7 @@ python scripts/signals.py --workdir WORK --config config.json
 
 ## 4. 輸出
 
-依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數），寫完先跑 `python scripts/validate_selections.py --workdir WORK --config config.json` 檢查；剪點切在句子中間時可加 `--snap` 對齊，再讀一次確認。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
+（出片後執行 `python scripts/learn_feedback.py --workdir WORK`，把使用者對草稿的修改記進 `feedback_log.md`；Clip Review 會自動做。）依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數），寫完先跑 `python scripts/validate_selections.py --workdir WORK --config config.json` 檢查；剪點切在句子中間時可加 `--snap` 對齊，再讀一次確認。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
 ```
 python scripts/refine_transcript.py --workdir WORK --config config.json
 ```
@@ -133,7 +133,7 @@ python scripts/export_premiere_xml.py --workdir WORK
 
 - 每支 MP4 用 ffprobe 確認長度與解析度符合 selections。
 - 每支直式抽一張中間畫面讀圖，確認版型沒跑掉、模型沒被切。
-- 抽看每支 SRT 前幾行，有明顯錯字（主播名、遊戲名）：固定會錯的詞加進 `text_replacements`，重跑 `refine_transcript.py` 和 `cut_clips.py --srt-only`。
+- 抽看每支 SRT 前幾行，有明顯錯字（主播名、遊戲名）：固定會錯的詞加進 `text_replacements`，重跑 `refine_transcript.py` 和 `cut_clips.py --srt-only`。使用者有校正過的 SRT 時，可用 `python scripts/suggest_terms.py --original 原.srt --corrected 校正.srt` 找出固定會錯的詞，給使用者確認後再加。
 - 回報：產出了哪些檔案、XML 怎麼匯入、SRT 怎麼匯入（Premiere：檔案 > 匯入 .srt，拖到序列成為字幕軌）。
 
 ## 6. 說話者頭像（選用，使用者後製時）
@@ -157,7 +157,8 @@ python scripts/export_premiere_xml.py --workdir WORK
 - **XML 匯入失敗「導入程序報告了一個一般錯誤」**：路徑或名稱裡有 emoji（例如 🎮，BMP 以外的字元）。`export_premiere_xml.py` 已會自動去掉名稱裡的 emoji，並在直播檔旁建立沒有 emoji 的硬連結（同一份資料、不佔空間）給 XML 引用；硬連結建立失敗時，把直播檔名的 emoji 拿掉再匯出。
 - **XML 匯入後顯示離線媒體**：直播檔被移動過。在 Premiere 對該檔案按右鍵 > 連結媒體。
 - **字幕時間整體偏移**：轉錄用的檔案和剪輯用的檔案不是同一個。
-- **聊天室爆量點都比事件晚很多**：調整 `chat_offset_sec`，重跑 `signals.py`（不用重新轉錄）。
+- **聊天室爆量點都比事件晚很多**：調整 `chat_offset_sec`，重跑 `signals.py`（不用重新轉錄）。`signals.py` 看起來沒對齊時會提示建議值，也寫在 `candidates_context.md` 最前面，只是建議，要用候選點確認。
+- **逐字稿少了一句**：Whisper 自己沒把握的段落會被濾掉，內容在 `WORK/transcript_dropped.txt`。誤濾太多就調高或拿掉 `whisper.filter` 的門檻。
 - **轉錄出現重複句或亂碼**：通常是長時間只有遊戲音樂，可忽略；嚴重時改 `whisper.model` 或對該段重轉。`hotwords` 放太多詞（例如一長串遊戲專有名詞）反而會讓配樂段落產生更多幻覺，保持 1–3 個最重要的詞。
 - **GPU 轉錄找不到 cublas／cudnn**：`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`。Windows 上的 DLL 路徑 `transcribe.py` 會自動加入，不用手動改 PATH。
 - **長直播轉錄**：用 `--separate` 時已經會先輸出 16kHz 人聲 WAV。不分離的話，可以先用 ffmpeg 抽出 16kHz 單聲道 WAV（`-vn -ac 1 -ar 16000`）再轉錄，時間戳不變，又不用每次解整個 MP4。

@@ -9,6 +9,7 @@ config.json
 config_*.json
 references/client_style.md
 references/local_notes.md
+references/feedback_log.md
 *.local.*
 
 # media and project files

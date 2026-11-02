@@ -17,6 +17,10 @@ from common import (fmt_ts, load_chat, load_config, load_transcript, probe,
                     save_json, work_paths)
 
 
+ALIGNED_SHIFT_SEC = 30    # within this, the shift is just people reacting; real streams show about ±15 s
+MIN_SHIFT_STRENGTH = 3.5
+
+
 def robust_z(x):
     med = np.median(x)
     mad = np.median(np.abs(x - med)) * 1.4826
@@ -70,6 +74,38 @@ def load_series(path, cols, n):
     for c in cols:
         out[c][idx[ok]] = data[c][ok]
     return out, True
+
+
+def estimate_chat_shift(chat_cnt, loud, max_shift=300, smooth=10):
+    """How many seconds chat activity lags the stream's loudness, by cross-correlation.
+    -> (shift seconds, strength), or None when there is too little to go on. An aligned stream
+    still shows a small shift; strength is the peak in robust standard deviations."""
+    n = len(chat_cnt)
+    if n < 4 * max_shift or chat_cnt.sum() < 30 or not loud.any():
+        return None
+    k = np.ones(smooth) / smooth
+    c, a = np.convolve(chat_cnt, k, "same"), np.convolve(loud, k, "same")
+    if c.std() < 1e-9 or a.std() < 1e-9:
+        return None
+    c, a = (c - c.mean()) / c.std(), (a - a.mean()) / a.std()
+    shifts = np.arange(-max_shift, max_shift + 1)
+    r = np.array([(c[max(0, s):n + min(0, s)] * a[max(0, -s):n - max(0, s)]).mean() for s in shifts])
+    med = np.median(r)
+    spread = np.median(np.abs(r - med)) * 1.4826
+    return int(shifts[r.argmax()]), float((r.max() - med) / spread) if spread > 1e-9 else 0.0
+
+
+def offset_hint(chat, chat_cnt, loud, off, duration):
+    """A warning about chat_offset_sec, or None. Only ever a suggestion: it never changes the offset."""
+    if chat:
+        late = max(m["t"] for m in chat) + off - duration
+        if late > 60:
+            return f"聊天室比影片多了 {late:.0f} 秒，影片可能比存檔晚開或被剪過，請檢查 chat_offset_sec"
+    est = estimate_chat_shift(chat_cnt, loud)
+    if est and abs(est[0]) > ALIGNED_SHIFT_SEC and est[1] >= MIN_SHIFT_STRENGTH:
+        return (f"聊天室反應和音量差了約 {est[0]:+d} 秒（強度 {est[1]:.1f}），時間可能沒對齊。"
+                f"請用候選點確認，需要的話把 chat_offset_sec 改成 {off - est[0]:.0f}")
+    return None
 
 
 def kw_score(text, table):
@@ -142,6 +178,10 @@ def main():
         # loudness relative to the local 5-minute baseline, positives only
         loud = np.clip(db - rolling_median(db, 300), 0, None)
 
+    hint = offset_hint(chat, chat_cnt, loud, off, n)
+    if hint:
+        print(f"[提示] {hint}")
+
     # screen change: strongest of scene cut / flash / fade, each relative to the whole stream
     visual = np.zeros(n)
     if has_vis:
@@ -200,16 +240,17 @@ def main():
     rank = sorted(cands, key=lambda c: -c["score"])
     for r, c in enumerate(rank, 1):
         c["rank"] = r
-    save_json({"duration": n, "window_sec": W, "chat_offset_sec": off, "candidates": cands},
+    save_json({"duration": n, "window_sec": W, "chat_offset_sec": off, "chat_offset_hint": hint, "candidates": cands},
               paths["candidates"])
 
-    write_context(paths["context"], cands, segs, chat, off, n)
+    write_context(paths["context"], cands, segs, chat, off, n, hint)
     print(f"挑出 {len(cands)} 個候選點 → {paths['context']}")
 
 
-def write_context(path, cands, segs, chat, off, n):
+def write_context(path, cands, segs, chat, off, n, hint=None):
     lines = ["# 候選精華點（依時間排序）",
              "",
+             *([f"**注意：{hint}**", ""] if hint else []),
              "說明：peak 是綜合訊號最高的秒數，聊天室訊號已往前平移約 chat_lag_sec 秒以對齊事件，",
              "但實際事件仍可能再早幾秒。逐字稿給 peak 前 90 秒到後 45 秒；",
              "聊天室列的是原始時間（比事件晚）。訊號數字是 peak 附近各訊號的最高標準分數（>2 算明顯）。",

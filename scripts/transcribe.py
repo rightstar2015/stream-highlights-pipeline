@@ -138,8 +138,22 @@ def is_hallucination(text, prompt=None):
     return bool(prompt) and len(t) >= 6 and t.rstrip("。.") in prompt
 
 
-def run_whisper(model, audio, kwargs, conv, offset=0.0, progress=False):
-    """Transcribe a path or 16 kHz numpy array; times are shifted by offset (source seconds)."""
+def low_confidence(seg, limits):
+    """Reason to drop a segment Whisper itself doubts, or None. Same rules as Whisper's own
+    fallback: very repetitive text, or "probably no speech" together with a low confidence."""
+    if not limits:
+        return None
+    if seg.compression_ratio > limits.get("compression_ratio_max", 2.4):
+        return f"重複度 {seg.compression_ratio:.1f}"
+    if (seg.no_speech_prob > limits.get("no_speech_prob_max", 0.6)
+            and seg.avg_logprob < limits.get("avg_logprob_min", -1.0)):
+        return f"無語音機率 {seg.no_speech_prob:.2f}、信心 {seg.avg_logprob:.2f}"
+    return None
+
+
+def run_whisper(model, audio, kwargs, conv, offset=0.0, progress=False, limits=None, dropped=None):
+    """Transcribe a path or 16 kHz numpy array; times are shifted by offset (source seconds).
+    Segments rejected by low_confidence go to the `dropped` list instead of the result."""
     t0 = time.time()
     segments, info = model.transcribe(audio, **kwargs)
     prompt = conv(kwargs.get("initial_prompt") or "")
@@ -147,6 +161,11 @@ def run_whisper(model, audio, kwargs, conv, offset=0.0, progress=False):
     for seg in segments:
         text = conv(seg.text.strip())
         if not text or is_hallucination(text, prompt):
+            continue
+        reason = low_confidence(seg, limits)
+        if reason:
+            if dropped is not None:
+                dropped.append(f"[{fmt_ts(seg.start + offset)}] （{reason}）{text}")
             continue
         wconv = getattr(conv, "conv", conv)
         words = [{"start": round(w.start + offset, 3), "end": round(w.end + offset, 3), "word": wconv(w.word)}
@@ -199,7 +218,12 @@ def main():
         kwargs["clip_timestamps"] = [s or 0.0, e] if e else [s or 0.0]
 
     model = load_model(cfg, args.model)
-    out, info = run_whisper(model, audio, kwargs, conv, offset=offset, progress=True)
+    dropped = []
+    out, info = run_whisper(model, audio, kwargs, conv, offset=offset, progress=True,
+                            limits=cfg["whisper"].get("filter"), dropped=dropped)
+    if dropped:
+        paths["dropped_txt"].write_text("\n".join(dropped) + "\n", encoding="utf-8")
+        print(f"濾掉 {len(dropped)} 段疑似幻覺 → {paths['dropped_txt']}（可以抽看，門檻在 whisper.filter）")
     save_json({"source": args.video, "duration": info.duration + offset, "separated": args.separate,
                "vocals_offset": offset, "segments": out}, paths["transcript_json"])
     write_txt(out, paths["transcript_txt"])
