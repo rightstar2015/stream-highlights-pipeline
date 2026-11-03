@@ -88,6 +88,7 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
+- `tighten.py`：s04（直式、3 段）從 38.5 秒剪到 31.8 秒。使用者看過：拉長的字尾、氣音常被剪掉，因為 Whisper 的字時間只涵蓋字的開頭；可以接受，後製再補。要改善可改用 vocals16k.wav 的細時間音量判斷停頓。
 - `fetch_chat.py --url`：6 小時多的存檔約 6 秒，491 則留言和最後一則的時間都與之前下載的檔案相同。沒有 JavaScript 執行環境時 yt-dlp 會警告缺少影片格式，不影響聊天室。
 
 尚未在真實環境驗證：macOS／Linux（只有 CI 的 smoke test，用真實直播沒跑過）；`languages/en.json`；`suggest_terms.py`（還沒有真實校正稿）；`export_premiere_xml.py` 的 `premiere.cards`（只有 smoke test 檢查 XML 內容，還沒匯入 Premiere）。
