@@ -221,6 +221,11 @@ def main():
     check(studio.JOB.start("render", str(W2), [("慢", slow)]), "工作：可以啟動")
     time.sleep(1)
     check(status("/api/stop", {}) == 200 and wait_job()["rc"] == -1, "工作：可以停止")
+    tg = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/tighten", data=json.dumps(
+        {"work": str(W2), "clip": {"id": "v", "format": "vertical", "segments": [{"in": 95, "out": 115}]}}).encode(),
+        headers={"Content-Type": "application/json"})).read())
+    check(tg["removed"] > 0 and len(tg["segments"]) > 1, f"Clip Review：剪掉停頓（{tg['removed']} 秒、{len(tg['segments'])} 段）")
+    check(status("/api/tighten", {"work": str(OUT), "clip": {}}) == 403, "Clip Review：剪掉停頓只接受已開啟的專案")
     studio.JOB.start("render", str(W2), [("重轉", fail, [fail]), ("出片", [PY, "-c", "print('ok')"])])
     j = wait_job()
     check(j["rc"] == 0 and any(e["step"] == "出片" and e["status"] == "done" for e in j["events"])
@@ -584,6 +589,26 @@ def main():
     man = json.loads((W / "clips" / "manifest.json").read_text(encoding="utf-8"))
     check(mp4.stat().st_mtime == mtime and [c["id"] for c in man["clips"]] == ["v01", "h01"],
           "--srt-only 不重出影片，--only 不會弄丟其他片的 manifest")
+
+    # cutting pauses inside segments
+    from tighten import pauses, tighten_clip
+    from validate_selections import cuts_speech
+    ws = [{"start": 10.0, "end": 11.0, "word": "a"}, {"start": 13.0, "end": 14.0, "word": "b"},
+          {"start": 14.2, "end": 15.0, "word": "c"}, {"start": 18.0, "end": 19.0, "word": "d"}]
+    check(pauses(9, 20, ws, 0.8, 0.2, {}, 3) == [(9, 9.8), (11.2, 12.8), (15.2, 17.8), (19.2, 20)],
+          "剪掉停頓：長停頓剪掉並留空氣，短間隔不動，頭尾的空白也剪")
+    energy = {t: -30.0 for t in range(0, 30)}
+    energy[16] = -20.0
+    check((15.2, 17.8) not in pauses(9, 20, ws, 0.8, 0.2, energy, 3), "剪掉停頓：停頓裡比說話大聲（笑聲）就保留")
+    tc = {"id": "v", "format": "vertical", "segments": [{"in": 9, "out": 20, "crop": "face"}],
+          "notes": [{"at": 12, "text": "被剪掉的時間"}, {"at": 13.5, "text": "原本就在"}]}
+    tsg = [{"start": 10.0, "end": 19.0, "text": "abcd", "words": ws}]
+    segs, notes, removed = tighten_clip(tc, tsg, {}, {"tighten": {"min_gap_sec": 0.8, "pad_sec": 0.2}})
+    check(len(segs) == 3 and all(s["crop"] == "face" for s in segs) and abs(removed - 5.8) < 0.01,
+          f"剪掉停頓：一段變三段跳剪，裁切保留（{segs}，{removed}）")
+    check(notes[0]["at"] == "00:00:12.800" and notes[1] == tc["notes"][1], "剪掉停頓：落在剪掉處的標記移到下一段開頭")
+    check(not cuts_speech(tsg, 12.8) and cuts_speech(tsg, 10.5) and cuts_speech(tsg, 14.1),
+          "選片檢查：剪在字之間的長停頓不算切在句子中間，切到字或短間隔才算")
 
     # subtitle splitting: never across Whisper segments, long phrases split evenly
     from cut_clips import build_cues

@@ -106,7 +106,7 @@ python scripts/signals.py --workdir WORK --config config.json
 
 ## 4. 輸出
 
-（出片後執行 `python scripts/learn_feedback.py --workdir WORK`，把使用者對草稿的修改記進 `feedback_log.md`；Clip Review 會自動做。）依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數），寫完先跑 `python scripts/validate_selections.py --workdir WORK --config config.json` 檢查；剪點切在句子中間時可加 `--snap` 對齊，再讀一次確認。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
+（出片後執行 `python scripts/learn_feedback.py --workdir WORK`，把使用者對草稿的修改記進 `feedback_log.md`；Clip Review 會自動做。）依使用者勾選寫 `WORK/selections.json`（格式見 `cut_clips.py` 開頭說明，時間可用 `"1:02:03.5"` 或秒數），寫完先跑 `python scripts/validate_selections.py --workdir WORK --config config.json` 檢查；剪點切在句子中間時可加 `--snap` 對齊，再讀一次確認。片段太長或停頓太多時，先跑 `python scripts/tighten.py --workdir WORK --config config.json` 預覽會剪掉幾秒，告訴使用者，**使用者同意才加 `--write`**（會把每段拆成跳剪，原本的版本留在 `selections.before_tighten.json`）。直式每段寫 `crop`；剪輯指示寫成 `notes`（會變成 Premiere 序列上的標記點）；Shorts 頂部大標題寫 `header_title`。然後先把選定的段落用高品質重轉（人聲分離＋large-v3，只轉選中的部分，幾十分鐘的素材約數分鐘）：
 ```
 python scripts/refine_transcript.py --workdir WORK --config config.json
 ```

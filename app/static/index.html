@@ -406,12 +406,14 @@ function renderReview() {
         <textarea class="wide" rows="${Math.max(2, c.segments.length)}" data-k="segments">${esc(c.segments.map(segToLine).join("\n"))}</textarea>
         <textarea class="wide" rows="2" data-k="notes" placeholder="1:02:07 插入驚嚇卡">${esc((c.notes || []).map(noteToLine).join("\n"))}</textarea>
         <div class="wide muted"><span class="chip">${esc(c.from || "")}</span><span class="chip">${clipDuration(c).toFixed(1)} 秒</span>
+          ${c.untight ? `<span class="chip">已剪掉停頓 ${c.untight.removed} 秒</span>` : ""}
           ${c.confidence ? `<span class="chip conf-${esc(c.confidence)}">信心 ${esc(c.confidence)}</span>` : ""}${esc(c.summary || "")}</div>
         <div class="issues"></div>
       </div>
       <div class="media"><div class="pv"></div>
         <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="btn" data-act="preview">預覽</button>
         <button class="btn" data-act="snap">對齊句子</button>
+        <button class="btn" data-act="tighten">${c.untight ? "復原停頓" : "剪掉停頓"}</button>
         <button class="btn" data-act="only">只出這支</button>
         <button class="btn" data-act="remove">移除</button></div></div>
     </div>`).join("");
@@ -435,6 +437,21 @@ function renderReview() {
         touch();
         renderReview();
       } catch (err) { alert(err.message); }
+    };
+    el.querySelector("[data-act=tighten]").onclick = async () => {
+      if (c.untight) {  // undo: the segments and notes from before
+        Object.assign(c, {segments: c.untight.segments, notes: c.untight.notes});
+        delete c.untight;
+      } else {
+        try {
+          const r = await api("/api/tighten", {work: project.work, clip: c});
+          if (!r.removed) return alert("沒有找到可以剪的停頓（逐字稿裡字與字的間隔都很短）");
+          c.untight = {segments: c.segments, notes: c.notes || [], removed: r.removed};
+          Object.assign(c, {segments: r.segments, notes: r.notes});
+        } catch (err) { return alert(err.message); }
+      }
+      touch();
+      renderReview();
     };
     el.querySelector("[data-act=only]").onclick = () => startRender(c);
     el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); touch(); renderReview(); };
@@ -481,7 +498,7 @@ document.querySelectorAll("[data-stop]").forEach(b => b.onclick = async () => {
 });
 
 async function startRender(one = null) {
-  const chosen = clips.filter(c => (c.on || c === one) && c.segments.length).map(({on, from, peak, ...c}) => c);
+  const chosen = clips.filter(c => (c.on || c === one) && c.segments.length).map(({on, from, peak, untight, ...c}) => c);
   if (!chosen.length) return alert("沒有勾選任何片段");
   try {
     touch();
