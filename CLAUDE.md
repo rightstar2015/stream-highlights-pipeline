@@ -34,6 +34,7 @@ scripts/
   avatar_tracks.py              依 Premiere 匯出 XML 的字卡軌，產生說話者頭像片段
   analyze_reference.py          分析過去成品（長度、換畫面節奏、響度、直式內容視窗、縮圖表）
   validate_selections.py        選片檢查（時間、裁切、長度、切在句子中間）；snap_range 對齊句子邊界
+  tighten.py                    剪掉片段內字與字之間的長停頓（停頓裡大聲就保留）→ 多段跳剪；預設只預覽
   learn_feedback.py             比對草稿與最終選片，寫入 references/feedback_log.md（不進 git）
   suggest_terms.py              比對校正前後的 SRT，建議 text_replacements（不會自動寫入）
   diarize.py                    選用：pyannote 說話者辨識 → speakers.json 與帶標籤的 SRT（草稿）

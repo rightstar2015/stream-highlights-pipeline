@@ -15,6 +15,7 @@ from common import (fmt_ts, load_best_transcript, load_config, load_json, normal
                     work_paths)
 
 MID_MARGIN = 0.15  # a cut this close to a sentence edge doesn't count as cutting into it
+PAUSE_OK = 0.3  # a cut in a pause between words at least this long doesn't cut into speech
 
 
 def segment_at(segs, t):
@@ -23,6 +24,21 @@ def segment_at(segs, t):
         if s["start"] + MID_MARGIN < t < s["end"] - MID_MARGIN:
             return s
     return None
+
+
+def cuts_speech(segs, t):
+    """True when a cut at t falls inside a sentence and not in a pause between its words."""
+    s = segment_at(segs, t)
+    if not s:
+        return False
+    ws = s.get("words") or []
+    before = [w for w in ws if w["end"] <= t]
+    after = [w for w in ws if w["start"] >= t]
+    if not ws or len(before) + len(after) < len(ws):  # no word timing, or t splits a word
+        return True
+    if not before or not after:
+        return False
+    return after[0]["start"] - before[-1]["end"] < PAUSE_OK
 
 
 def snap_range(a, b, segs, max_shift=1.5, pad=0.2):
@@ -100,9 +116,9 @@ def validate(clips, cfg, duration=None, segs=()):
             crop = s.get("crop")
             if fmt == "vertical" and isinstance(crop, str) and crop not in presets:
                 add("error", f"裁切「{crop}」不存在，可用：{'、'.join(presets)}")
-            if segment_at(segs, s["a"]):
+            if cuts_speech(segs, s["a"]):
                 add("warning", f"進點 {fmt_ts(s['a'])} 切在句子中間")
-            if segment_at(segs, s["b"]):
+            if cuts_speech(segs, s["b"]):
                 add("warning", f"出點 {fmt_ts(s['b'])} 切在句子中間")
         ordered = sorted(times, key=lambda s: s["a"])
         if any(x["b"] > y["a"] for x, y in zip(ordered, ordered[1:])):

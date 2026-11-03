@@ -68,6 +68,9 @@
   "_auto_select_說明": "pipeline.py --auto-select 最多推薦幾支；超過時依信心留下較好的。",
   "auto_select": {"max_vertical": 8, "max_horizontal": 5},
 
+  "_tighten_說明": "tighten.py／Clip Review「剪掉停頓」：字與字之間超過 min_gap_sec 秒的停頓會剪掉，兩邊各留 pad_sec 秒；停頓裡的音量比說話時高 keep_loud_db 以上（多半是笑聲、尖叫）就保留。",
+  "tighten": {"min_gap_sec": 0.8, "pad_sec": 0.2, "keep_loud_db": 3},
+
   "_limits_說明": "validate_selections.py 的建議長度（秒），超出只會提醒，不會擋下出片。",
   "limits": {"vertical_sec": [18, 35], "horizontal_sec": [120, 240]},
 

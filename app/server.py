@@ -31,6 +31,7 @@ from common import (default_workdir, find_config, fmt_ts, load_best_transcript, 
                     parse_ts, probe, save_json, work_paths)
 from cut_clips import resolve_template, safe_name, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
+from tighten import load_energy, tighten_clip  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
 
 PY = sys.executable
@@ -392,11 +393,12 @@ class Handler(BaseHTTPRequestHandler):
                        "/api/preview": self.preview, "/api/pick": self.pick,
                        "/api/open": self.open_path, "/api/review_state": self.review_state,
                        "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop,
+                       "/api/tighten": self.tighten,
                        "/api/crop_state": self.crop_state, "/api/crop_frame": self.crop_frame,
                        "/api/crop_preview": self.crop_preview, "/api/crop_save": self.crop_save}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
-            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap")
+            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap", "/api/tighten")
                  or u.path.startswith("/api/crop_")) and not known_project(data.get("work", ""))):
                 return self.send_json({"error": "不是已開啟的專案"}, 403)
             return handler(data)
@@ -487,6 +489,13 @@ class Handler(BaseHTTPRequestHandler):
         paths = work_paths(d["work"])
         meta = studio_meta(paths)
         self.send_json({"segments": snap_clip(d["clip"], transcript_for(paths), video_duration(paths, meta))})
+
+    def tighten(self, d):
+        paths = work_paths(d["work"])
+        meta = studio_meta(paths)
+        segs, notes, removed = tighten_clip(d["clip"], transcript_for(paths), load_energy(paths["audio"]),
+                                            load_config(meta.get("config")))
+        self.send_json({"segments": segs, "notes": notes, "removed": round(removed, 1)})
 
     def stop(self, d):
         self.send_json({"ok": JOB.stop()})
