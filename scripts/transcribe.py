@@ -60,7 +60,7 @@ def make_text_fixer(cfg):
 
 def fix_words(words, reps):
     """Apply replacements across word tokens: large-v3 often emits one character per token,
-    so "米" + "亞" must become "米" + "婭". Replaced text goes to the token where the match starts."""
+    so "小" + "銘" must become "小" + "明". Replaced text goes to the token where the match starts."""
     chars = [(ch, i) for i, w in enumerate(words) for ch in w["word"]]
     for k, v in reps:
         out, j = [], 0

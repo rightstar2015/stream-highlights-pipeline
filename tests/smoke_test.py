@@ -107,6 +107,17 @@ def check(cond, label):
 
 
 def main():
+    # private terms (client names, local paths) must never reach the public repo; skipped without the list
+    r = subprocess.run([PY, str(HERE.parent / "tools" / "privacy_check.py")], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    print("  " + "\n  ".join(r.stdout.strip().splitlines()))
+    check(r.returncode == 0, "隱私檢查：被追蹤的檔案沒有私人詞")
+    sys.path.insert(0, str(HERE.parent / "tools"))
+    from privacy_check import scan
+    OUT.mkdir(exist_ok=True)
+    (OUT / "privacy.txt").write_text("第一行\n這裡有 Secret_Name 喔\n", encoding="utf-8")
+    check(scan([OUT / "privacy.txt"], ["secret_name"]) == [(OUT / "privacy.txt", 2, "secret_name")],
+          "隱私檢查：找得到私人詞（不分大小寫）和行號")
     print("建立測試素材...")
     video = make_fixture()
     sh("fetch_chat.py", "--file", OUT / "chat.live_chat.json", "--workdir", W)

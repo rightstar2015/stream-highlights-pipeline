@@ -10,6 +10,7 @@ config_*.json
 references/client_style.md
 references/local_notes.md
 references/feedback_log.md
+references/private_terms.txt
 *.local.*
 
 # media and project files
