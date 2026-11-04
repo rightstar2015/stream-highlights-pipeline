@@ -56,8 +56,15 @@ class Step:
     def done(self):
         p = Path(self.output)
         if p.is_dir():
-            return any(p.iterdir())
-        return p.exists() and p.stat().st_size > 0
+            return any(".part." not in f.name for f in p.iterdir())
+        if not (p.exists() and p.stat().st_size > 0):
+            return False
+        if p.suffix == ".json":  # a cut-off file (written before atomic writes, or by hand) isn't done
+            try:
+                load_json(p)
+            except ValueError:
+                return False
+        return True
 
 
 def start(step, logdir):

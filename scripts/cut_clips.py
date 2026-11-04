@@ -31,7 +31,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from common import (SKILL_DIR, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
+from common import (SKILL_DIR, atomic_output, atomic_write, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
                     normalize_segments, parse_ts, probe, run, save_json,
                     source_to_clip_time, work_paths)
 
@@ -244,7 +244,7 @@ def srt_time(t):
 
 
 def write_srt(cues, path):
-    with open(path, "w", encoding="utf-8-sig") as f:  # BOM helps Premiere on Windows
+    with atomic_write(path, encoding="utf-8-sig") as f:  # BOM helps Premiere on Windows
         for i, (st, en, txt) in enumerate(cues, 1):
             f.write(f"{i}\n{srt_time(st)} --> {srt_time(en)}\n{txt}\n\n")
 
@@ -300,11 +300,13 @@ def render(src, info, clip, cfg, out_mp4, preview=False):
         lufs = enc.get("loudness_lufs")
         if lufs is not None:
             # whole-clip loudness normalisation; video is copied untouched
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(joined), "-c:v", "copy",
-                 "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11", "-c:a", "aac",
-                 "-b:a", enc["audio_bitrate"], "-ar", "48000", "-movflags", "+faststart", str(out_mp4)])
+            with atomic_output(out_mp4) as tmp_mp4:
+                run(["ffmpeg", "-y", "-v", "error", "-i", str(joined), "-c:v", "copy",
+                     "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11", "-c:a", "aac",
+                     "-b:a", enc["audio_bitrate"], "-ar", "48000", "-movflags", "+faststart", str(tmp_mp4)])
         else:
-            shutil.move(str(joined), out_mp4)
+            with atomic_output(out_mp4) as tmp_mp4:  # the temp dir may be on another drive: move, then rename
+                shutil.move(str(joined), tmp_mp4)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return out_mp4

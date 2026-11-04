@@ -611,6 +611,27 @@ def main():
     check(mp4.stat().st_mtime == mtime and [c["id"] for c in man["clips"]] == ["v01", "h01"],
           "--srt-only 不重出影片，--only 不會弄丟其他片的 manifest")
 
+    # interrupted writes leave the old file, and a cut-off JSON doesn't count as a finished step
+    from common import atomic_write
+    from pipeline import Step
+    aw = OUT / "atomic.txt"
+    aw.write_text("舊內容", encoding="utf-8")
+    try:
+        with atomic_write(aw) as f:
+            f.write("寫到一半")
+            raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        pass
+    check(aw.read_text(encoding="utf-8") == "舊內容" and not list(OUT.glob("atomic.part*")),
+          "寫檔：中途中斷時保留原檔，也不留暫存檔")
+    cut = OUT / "cut" / "transcript.json"
+    cut.parent.mkdir()
+    cut.write_text('{"segments": [{"start": 1', encoding="utf-8")
+    (OUT / "cut" / "frames").mkdir()
+    (OUT / "cut" / "frames" / "00-01-00.part.jpg").write_bytes(b"x")
+    check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
+          "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
+
     # cutting pauses inside segments
     from tighten import pauses, tighten_clip
     from validate_selections import cuts_speech

@@ -13,7 +13,7 @@ import math
 
 import numpy as np
 
-from common import (fmt_ts, load_chat, load_config, load_transcript, probe,
+from common import (atomic_write, fmt_ts, load_chat, load_config, load_transcript, probe,
                     save_json, work_paths)
 
 
@@ -207,7 +207,7 @@ def main():
         comps[name] = z
         total += w * z
 
-    with open(paths["signals"], "w", encoding="utf-8") as f:
+    with atomic_write(paths["signals"]) as f:
         f.write("t,chat,chat_kw,audio_rel_db,superchat,speech_kw,visual,scream,laugh,score\n")
         for t in range(n):
             f.write(f"{t},{int(chat_cnt[t])},{chat_kw[t]:.1f},{loud[t]:.1f},{int(sc[t])},{speech[t]:.1f},"
@@ -284,7 +284,7 @@ def write_context(path, cands, segs, chat, off, n, hint=None):
                 tag = f"[SC {m['amount']}] " if m.get("type") in ("superchat", "sticker") else ""
                 lines.append(f"  [{fmt_ts(m['t'] + off)}] {tag}{m['text']}")
             lines.append("")
-    with open(path, "w", encoding="utf-8") as f:
+    with atomic_write(path) as f:
         f.write("\n".join(lines) + "\n")
 
 

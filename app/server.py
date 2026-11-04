@@ -27,7 +27,7 @@ APP = Path(__file__).resolve().parent
 SKILL = APP.parent
 SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from common import (default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
+from common import (atomic_output, default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
                     parse_ts, probe, save_json, work_paths)
 from cut_clips import resolve_template, safe_name, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
@@ -241,8 +241,9 @@ def make_preview(work, video, ranges):
         fl = "".join(f"[{i}:v]scale=-2:480,setsar=1[v{i}];" for i in range(n))
         fl += "".join(f"[v{i}][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
         cmd += ["-filter_complex", fl, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast",
-                "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out)]
-        subprocess.run(cmd, check=True, capture_output=True)
+                "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]
+        with atomic_output(out) as tmp:  # an interrupted render must not become the cached preview
+            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
     return str(out)
 
 
@@ -530,8 +531,9 @@ class Handler(BaseHTTPRequestHandler):
         at = min(max(0.0, parse_ts(d["at"])), max(0.0, info["duration"] - 1))
         out = paths["dir"] / "previews" / "crop_frame.jpg"
         out.parent.mkdir(exist_ok=True)
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
-                        "-q:v", "3", str(out)], check=True, capture_output=True)
+        with atomic_output(out) as tmp:
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
+                            "-q:v", "3", str(tmp)], check=True, capture_output=True)
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_preview(self, d):
@@ -547,8 +549,9 @@ class Handler(BaseHTTPRequestHandler):
         if tpl:
             cmd += ["-loop", "1", "-i", str(tpl)]
         cmd += ["-filter_complex", vertical_filter(lay, info["width"], info["height"], crop, bool(tpl)),
-                "-map", "[out]", "-frames:v", "1", "-q:v", "3", str(out)]
-        subprocess.run(cmd, check=True, capture_output=True)
+                "-map", "[out]", "-frames:v", "1", "-q:v", "3"]
+        with atomic_output(out) as tmp:
+            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_save(self, d):

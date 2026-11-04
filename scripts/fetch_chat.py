@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from common import need_tool, work_paths
+from common import atomic_write, need_tool, work_paths
 
 
 def runs_to_text(runs):
@@ -101,7 +101,7 @@ def main():
         src = cands[-1]
 
     msgs = parse_live_chat(src)
-    with open(paths["chat"], "w", encoding="utf-8") as f:
+    with atomic_write(paths["chat"]) as f:
         for m in msgs:
             f.write(json.dumps(m, ensure_ascii=False) + "\n")
     sc = sum(1 for m in msgs if m["type"] in ("superchat", "sticker"))

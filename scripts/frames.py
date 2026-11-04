@@ -10,7 +10,7 @@ Usage:
 """
 import argparse
 
-from common import fmt_ts, load_json, need_tool, parse_ts, run, work_paths
+from common import atomic_output, fmt_ts, load_json, need_tool, parse_ts, run, work_paths
 
 
 def strip(video, t, out):
@@ -20,15 +20,16 @@ def strip(video, t, out):
         cmd += ["-ss", f"{x:.2f}", "-i", str(video)]
     fl = ";".join(f"[{i}:v]trim=end_frame=1,scale=640:-2,setpts=PTS-STARTPTS[v{i}]" for i in range(3))
     fl += ";[v0][v1][v2]hstack=inputs=3[out]"
-    cmd += ["-filter_complex", fl, "-map", "[out]", "-frames:v", "1", "-q:v", "4", str(out)]
-    run(cmd)
+    with atomic_output(out) as tmp:
+        run(cmd + ["-filter_complex", fl, "-map", "[out]", "-frames:v", "1", "-q:v", "4", str(tmp)])
 
 
 def calibrate(video, t, out):
     grid = ("drawgrid=w=100:h=100:t=1:c=yellow@0.5,"
             "drawgrid=w=500:h=500:t=3:c=red@0.8")
-    run(["ffmpeg", "-y", "-v", "error", "-ss", str(t), "-i", str(video),
-         "-frames:v", "1", "-vf", grid, "-q:v", "3", str(out)])
+    with atomic_output(out) as tmp:
+        run(["ffmpeg", "-y", "-v", "error", "-ss", str(t), "-i", str(video),
+             "-frames:v", "1", "-vf", grid, "-q:v", "3", str(tmp)])
 
 
 def main():

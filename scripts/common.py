@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 # Windows consoles default to cp950; force UTF-8 so Chinese prints safely.
@@ -22,9 +23,31 @@ def load_json(path):
         return json.load(f)
 
 
+@contextmanager
+def atomic_output(path):
+    """A temporary path next to `path` that replaces it only when the block finishes. A run that is
+    stopped or crashes then never leaves a half-written file that looks finished. The extension is
+    kept, since ffmpeg picks the format from it."""
+    path = Path(path)
+    tmp = path.with_name(f"{path.stem}.part{path.suffix}")
+    try:
+        yield tmp
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+@contextmanager
+def atomic_write(path, encoding="utf-8"):
+    """open(path, "w") that only replaces path once everything is written."""
+    with atomic_output(path) as tmp, open(tmp, "w", encoding=encoding) as f:
+        yield f
+
+
 def save_json(obj, path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with atomic_write(path) as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 

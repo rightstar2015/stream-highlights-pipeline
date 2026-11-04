@@ -10,7 +10,7 @@ import tempfile
 
 import numpy as np
 
-from common import need_tool, parse_ts, work_paths
+from common import atomic_write, need_tool, parse_ts, work_paths
 
 SR = 8000  # loudness only; low rate keeps it fast
 
@@ -56,7 +56,7 @@ def main():
     if rc != 0 or not rows:
         # write nothing: an empty CSV would look finished to pipeline.py and be skipped forever
         sys.exit(f"[錯誤] 讀不到音訊（ffmpeg 回傳 {rc}）：" + " / ".join(tail))
-    with open(paths["audio"], "w", encoding="utf-8") as f:
+    with atomic_write(paths["audio"]) as f:
         f.write("t,rms_db\n")
         for t, db in rows:
             f.write(f"{t},{db:.2f}\n")

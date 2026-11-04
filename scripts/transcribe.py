@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from common import fmt_ts, load_config, parse_ts, probe, save_json, work_paths
+from common import atomic_write, fmt_ts, load_config, parse_ts, probe, save_json, work_paths
 
 
 def add_nvidia_dll_dirs():
@@ -181,7 +181,7 @@ def run_whisper(model, audio, kwargs, conv, offset=0.0, progress=False, limits=N
 
 
 def write_txt(segs, path):
-    with open(path, "w", encoding="utf-8") as f:
+    with atomic_write(path) as f:
         f.write("".join(f"[{fmt_ts(s['start'])}] {s['text']}\n" for s in segs))
 
 
@@ -222,7 +222,8 @@ def main():
     out, info = run_whisper(model, audio, kwargs, conv, offset=offset, progress=True,
                             limits=cfg["whisper"].get("filter"), dropped=dropped)
     if dropped:
-        paths["dropped_txt"].write_text("\n".join(dropped) + "\n", encoding="utf-8")
+        with atomic_write(paths["dropped_txt"]) as f:
+            f.write("\n".join(dropped) + "\n")
         print(f"濾掉 {len(dropped)} 段疑似幻覺 → {paths['dropped_txt']}（可以抽看，門檻在 whisper.filter）")
     save_json({"source": args.video, "duration": info.duration + offset, "separated": args.separate,
                "vocals_offset": offset, "segments": out}, paths["transcript_json"])

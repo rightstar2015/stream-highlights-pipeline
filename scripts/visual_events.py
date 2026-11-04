@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-from common import fmt_ts, load_config, need_tool, parse_ts, probe, work_paths
+from common import atomic_write, fmt_ts, load_config, need_tool, parse_ts, probe, work_paths
 
 W, H = 160, 90  # analysis size; enough to see big changes, keeps 6h streams fast
 BINS = 16
@@ -116,7 +116,7 @@ def main():
     secs = sorted(rows)
     luma = np.array([np.mean(rows[s]["luma"]) for s in secs])
     flash, fade = brightness_changes(luma)
-    with open(paths["visual"], "w", encoding="utf-8") as f:
+    with atomic_write(paths["visual"]) as f:
         f.write("t,motion,cut,luma,flash,fade\n")
         for i, s in enumerate(secs):
             r = rows[s]

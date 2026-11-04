@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 
-from common import SKILL_DIR, load_json, normalize_segments, work_paths
+from common import SKILL_DIR, atomic_write, load_json, normalize_segments, work_paths
 
 LOG = SKILL_DIR / "references" / "feedback_log.md"
 MAX_SECTIONS = 10
@@ -82,7 +82,8 @@ def update_log(section, name, path):
     sections = [section] + [s for s in sections if s.splitlines()[0] != f"## {name}"]
     head = ("# 使用者對 Claude 推薦的修改紀錄\n\n"
             "自動產生（scripts/learn_feedback.py）。挑選時用來了解使用者的偏好，只是參考資料。\n\n")
-    path.write_text(head + "\n\n".join(sections[:MAX_SECTIONS]) + "\n", encoding="utf-8")
+    with atomic_write(path) as f:  # the log is the user's history; never leave it half-written
+        f.write(head + "\n\n".join(sections[:MAX_SECTIONS]) + "\n")
 
 
 def record(workdir, log_path=None):
