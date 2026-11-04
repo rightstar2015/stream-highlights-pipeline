@@ -22,10 +22,12 @@ import argparse
 import importlib.util
 import json
 import os
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -240,6 +242,23 @@ def find_claude():
     return None
 
 
+def make_sandbox(dst):
+    """The files the unattended Claude needs, copied to dst so it runs there instead of in the Skill
+    folder. Anything else in that folder (evaluation data from other streams, test output, virtual
+    environments) is then out of its reach, and can't bias its picks."""
+    dst = Path(dst)
+    shutil.copy2(SKILL_DIR / "SKILL.md", dst / "SKILL.md")
+    shutil.copy2(SKILL_DIR / "config.example.json", dst / "config.example.json")
+    shutil.copytree(SKILL_DIR / "languages", dst / "languages")
+    (dst / "scripts").mkdir()
+    for f in (SKILL_DIR / "scripts").glob("*.py"):  # frames.py needs common.py; cut_clips.py documents the format
+        shutil.copy2(f, dst / "scripts" / f.name)
+    (dst / "references").mkdir()
+    for f in (SKILL_DIR / "references").glob("*.md"):
+        shutil.copy2(f, dst / "references" / f.name)
+    return dst
+
+
 def auto_select(args, paths, log):
     claude = find_claude()
     if not claude:
@@ -250,22 +269,28 @@ def auto_select(args, paths, log):
         return True
     limits = load_config(args.config).get("auto_select", {})
     lines = sum(1 for _ in open(paths["transcript_txt"], encoding="utf-8")) if paths["transcript_txt"].exists() else 0
-    prompt = AUTO_PROMPT.format(skill=SKILL_DIR, video=args.video, work=paths["dir"].resolve(),
+    sandbox = Path(tempfile.mkdtemp(prefix="shp_auto_"))
+    make_sandbox(sandbox)
+    prompt = AUTO_PROMPT.format(skill=sandbox, video=args.video, work=paths["dir"].resolve(),
                                 config=args.config or "（無，使用預設）", lines=lines,
                                 max_vertical=limits.get("max_vertical", 8),
                                 max_horizontal=limits.get("max_horizontal", 5))
     # prompt goes in on stdin: --add-dir / --tools / --allowedTools take several values and would swallow it.
     # --tools removes every other tool (no writing, no web, no MCP); dontAsk denies anything not allowed.
-    # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside this folder and WORK.
+    # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside the sandbox and WORK.
     cmd = [claude, "-p", "--permission-mode", "dontAsk", "--strict-mcp-config",
            "--add-dir", str(paths["dir"].resolve()),
            "--tools", "Read,Glob,Grep,Bash",
            "--allowedTools", "Bash(python scripts/frames.py:*)"]
     emit(log, "auto_select", "start")
     t0 = time.time()
-    with open(paths["dir"] / "logs" / "auto_select.log", "w", encoding="utf-8") as f:
-        rc = subprocess.run(cmd, cwd=SKILL_DIR, input=prompt, text=True, encoding="utf-8",
-                            stdout=f, stderr=subprocess.STDOUT).returncode
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "SHP_AUTO_WORKDIR": str(paths["dir"].resolve())}
+    try:
+        with open(paths["dir"] / "logs" / "auto_select.log", "w", encoding="utf-8") as f:
+            rc = subprocess.run(cmd, cwd=sandbox, input=prompt, text=True, encoding="utf-8", env=env,
+                                stdout=f, stderr=subprocess.STDOUT).returncode
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
     text = (paths["dir"] / "logs" / "auto_select.log").read_text(encoding="utf-8", errors="replace")
     err = {}
     warning = None

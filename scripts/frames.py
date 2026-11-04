@@ -9,6 +9,8 @@ Usage:
       -> frames/calibrate.jpg : one full-res frame with a 100px grid, for setting crops
 """
 import argparse
+import os
+from pathlib import Path
 
 from common import atomic_output, fmt_ts, load_json, need_tool, parse_ts, run, work_paths
 
@@ -41,6 +43,10 @@ def main():
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--calibrate")
     args = ap.parse_args()
+    # pipeline.py --auto-select sets this: the unattended Claude may only add frames to its own project
+    only = os.environ.get("SHP_AUTO_WORKDIR")
+    if only and Path(args.workdir).resolve() != Path(only).resolve():
+        raise SystemExit(f"[錯誤] 無人在線挑選只能寫入 {only}")
     need_tool("ffmpeg")
     paths = work_paths(args.workdir)
     paths["frames"].mkdir(exist_ok=True)

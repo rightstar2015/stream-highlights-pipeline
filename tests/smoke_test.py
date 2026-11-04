@@ -661,6 +661,19 @@ def main():
     check("/" not in clip_stem({"id": "../x", "title": "t"}) and "\\" not in clip_stem({"id": "a\\b", "title": "t"})
           and not clip_stem({"id": "..", "title": "t"}).startswith("."), "出片：檔名裡的 id 也會清掉路徑字元")
 
+    # --auto-select runs in a sandbox with only what it needs, and frames.py stays in its project
+    from pipeline import make_sandbox
+    (OUT / "sandbox").mkdir()
+    box = make_sandbox(OUT / "sandbox")
+    names = {str(p.relative_to(box)).replace("\\", "/") for p in box.rglob("*")}
+    check({"SKILL.md", "scripts/frames.py", "scripts/common.py", "references/selection_guide.md"} <= names
+          and not any(n.startswith(("_eval", "tests", "tools", "app", ".git")) for n in names),
+          "無人挑選：暫存資料夾只有需要的檔案，讀不到評估資料和測試輸出")
+    r = subprocess.run([PY, "frames.py", "--video", str(video), "--workdir", str(OUT / "elsewhere"), "--times", "10"],
+                       cwd=SCRIPTS, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env={**__import__("os").environ, "SHP_AUTO_WORKDIR": str(W)})
+    check(r.returncode != 0 and not (OUT / "elsewhere").exists(), "無人挑選：frames.py 不能寫到別的資料夾")
+
     # cutting pauses inside segments
     from tighten import pauses, tighten_clip
     from common import parse_ts as parse_ts_for, work_paths as work_paths_for

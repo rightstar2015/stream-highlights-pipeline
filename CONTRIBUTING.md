@@ -8,7 +8,7 @@
 - 真實的頻道、甲方或來賓名稱。例子一律用虛構的。
 - 本機路徑、使用者名稱、token、cookies。
 
-回報問題時也一樣；附記錄前先把這些遮掉。需要素材時，用 `tests/smoke_test.py` 的合成影片重現。
+回報問題時也一樣；附記錄前先把這些遮掉。可以把自己的私人詞（頻道名、路徑）一行一個寫進 `references/private_terms.txt`（不進 git），`python tools/privacy_check.py` 會掃描被追蹤的檔案，smoke test 也會跑。需要素材時，用 `tests/smoke_test.py` 的合成影片重現。
 
 ## 開發
 
