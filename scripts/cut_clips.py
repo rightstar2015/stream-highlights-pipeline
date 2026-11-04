@@ -227,12 +227,14 @@ def build_cues(tsegs, csegs, max_chars, pause):
                 merged[-1] = merged[-1] + [{"word": " ", "start": ln[0]["start"], "end": ln[0]["start"]}] + ln
             else:
                 merged.append(ln)
+        limit = offset + (b - a)  # a word's end can run past the cut; no cue may outlast its segment
         for ln in merged:
             txt = text_of(ln)
             if txt:
-                st = ln[0]["start"] - a + offset
-                en = ln[-1]["end"] - a + offset
-                cues.append([max(0.0, st), max(st + 0.5, en), txt])
+                st = max(0.0, ln[0]["start"] - a + offset)
+                en = min(max(st + 0.5, ln[-1]["end"] - a + offset), limit)
+                if en - st > 0.05:
+                    cues.append([st, en, txt])
         offset += b - a
     for i in range(len(cues) - 1):
         if cues[i][1] > cues[i + 1][0]:

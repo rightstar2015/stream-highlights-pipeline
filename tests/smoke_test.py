@@ -734,6 +734,13 @@ def main():
     check(not cuts_speech(tsg, 12.8) and cuts_speech(tsg, 10.5) and cuts_speech(tsg, 14.1),
           "選片檢查：剪在字之間的長停頓不算切在句子中間，切到字或短間隔才算")
 
+    # the last cue of a segment ends with the segment, even when its last word runs past the cut
+    from cut_clips import build_cues
+    tail =[{"start": 0, "end": 3.5, "text": "最後一句", "words": [
+        {"start": 2.0, "end": 2.4, "word": "最後"}, {"start": 2.6, "end": 3.3, "word": "一句"}]}]
+    cues_t = build_cues(tail, [{"a": 0, "b": 3.0}, {"a": 10, "b": 12}], 12, 0.5)
+    check(cues_t and "一句" in cues_t[-1][2] and cues_t[-1][1] <= 3.0, f"字幕：最後一句不超出片段（{cues_t}）")
+
     # subtitle splitting: never across Whisper segments, long phrases split evenly
     from cut_clips import build_cues
     from transcribe import fix_words
