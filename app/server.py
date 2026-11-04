@@ -29,7 +29,7 @@ SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from common import (atomic_output, default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
                     parse_ts, probe, save_json, work_paths)
-from cut_clips import resolve_template, safe_name, vertical_filter  # noqa: E402
+from cut_clips import clip_stem, resolve_template, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
 from tighten import load_energy, tighten_clip  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
@@ -195,7 +195,7 @@ def project_state(work):
     if paths["clips"].exists():
         out["clips"] = sorted(str(p) for p in paths["clips"].iterdir() if p.suffix in (".mp4", ".srt"))
     out["xml"] = [str(p) for p in paths["dir"].glob("*_premiere.xml")]
-    wanted = {Path(f"{c['id']}_{safe_name(c.get('title'))}.mp4").stem for c in (out["selections"] or {}).get("clips", [])}
+    wanted = {clip_stem(c) for c in (out["selections"] or {}).get("clips", [])}
     out["stale_clips"] = [Path(f).name for f in out["clips"] if out["selections"] and Path(f).stem not in wanted]
     return out
 

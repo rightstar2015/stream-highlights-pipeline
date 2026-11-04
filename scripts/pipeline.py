@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-from common import (SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
+from common import (CLIP_ID, SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
                     parse_ts, probe, save_json, work_paths)
 from validate_selections import validate
 
@@ -208,7 +208,7 @@ def parse_auto_output(text, source):
         raise ValueError("候選清單或 clips 是空的")
     out, seen = [], set()
     for c in clips:
-        if not isinstance(c, dict) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(c.get("id", ""))):
+        if not isinstance(c, dict) or not re.fullmatch(CLIP_ID, str(c.get("id", ""))):
             raise ValueError(f"片段 id 不正確：{c.get('id') if isinstance(c, dict) else c!r}")
         if c["id"] in seen:
             raise ValueError(f"片段 id 重複：{c['id']}")

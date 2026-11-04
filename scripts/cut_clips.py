@@ -115,6 +115,12 @@ def safe_name(s):
     return s[:40]
 
 
+def clip_stem(clip):
+    """File name (no extension) of a clip's MP4/SRT. The id is cleaned too, as a second guard
+    behind validate_selections: a hand-typed id must never point outside clips/."""
+    return f"{safe_name(str(clip['id'])).strip('.')}_{safe_name(clip.get('title'))}"
+
+
 # ---------------- subtitles ----------------
 
 def phrases_in(segs, a, b, pause):
@@ -341,7 +347,7 @@ def main():
             if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
                 raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
         length = sum(s["b"] - s["a"] for s in clip["_segs"])
-        base = paths["clips"] / f"{clip['id']}_{safe_name(clip.get('title'))}"
+        base = paths["clips"] / clip_stem(clip)
         out = base.with_suffix(".mp4")
         print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
               ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")

@@ -632,6 +632,19 @@ def main():
     check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
           "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
 
+    # clip ids become file names
+    from validate_selections import validate
+    from cut_clips import clip_stem
+    base_clip = {"format": "horizontal", "title": "同名", "segments": [[1, 2]]}
+    bad = validate([dict(base_clip, id=x) for x in ("a/b", "..\\x", "v01:")], {}, None)
+    check(sum("只能用英數字" in i["msg"] for i in bad) == 3, "選片檢查：id 有路徑或特殊字元是錯誤")
+    same = validate([dict(base_clip, id="v01"), dict(base_clip, id="v01", title="同 名")], {}, None)
+    check(any("同一個檔名" in i["msg"] for i in same) or any("重複" in i["msg"] for i in same), "選片檢查：檔名相同是錯誤")
+    clash = validate([dict(base_clip, id="v01", title="a b"), dict(base_clip, id="v01_a", title="b")], {}, None)
+    check(any("同一個檔名" in i["msg"] for i in clash), "選片檢查：不同 id 組出同一個檔名是錯誤")
+    check("/" not in clip_stem({"id": "../x", "title": "t"}) and "\\" not in clip_stem({"id": "a\\b", "title": "t"})
+          and not clip_stem({"id": "..", "title": "t"}).startswith("."), "出片：檔名裡的 id 也會清掉路徑字元")
+
     # cutting pauses inside segments
     from tighten import pauses, tighten_clip
     from validate_selections import cuts_speech

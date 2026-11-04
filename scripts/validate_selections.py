@@ -9,10 +9,12 @@ outside the limits in config "limits", overlapping segments, a cut in the middle
 Exit code 1 when there are errors.
 """
 import argparse
+import re
 import sys
 
-from common import (fmt_ts, load_best_transcript, load_config, load_json, normalize_segments, probe, save_json,
+from common import (CLIP_ID, fmt_ts, load_best_transcript, load_config, load_json, normalize_segments, probe, save_json,
                     work_paths)
+from cut_clips import clip_stem
 
 MID_MARGIN = 0.15  # a cut this close to a sentence edge doesn't count as cutting into it
 PAUSE_OK = 0.3  # a cut in a pause between words at least this long doesn't cut into speech
@@ -85,7 +87,7 @@ def validate(clips, cfg, duration=None, segs=()):
     issues = []
     limits = cfg.get("limits", {})
     presets = cfg.get("vertical_layout", {}).get("crop_presets", {})
-    seen = set()
+    seen, stems = set(), {}
 
     for c in clips:
         cid = str(c.get("id", "?"))
@@ -96,6 +98,13 @@ def validate(clips, cfg, duration=None, segs=()):
         if cid in seen:
             add("error", "片段 id 重複")
         seen.add(cid)
+        if not re.fullmatch(CLIP_ID, cid):
+            add("error", "片段 id 只能用英數字、底線、連字號（最多 32 字），例如 v01")
+        else:
+            stem = clip_stem(c)
+            if stem in stems and stems[stem] != cid:
+                add("error", f"和 {stems[stem]} 會輸出成同一個檔名，請改 id 或標題")
+            stems.setdefault(stem, cid)
         fmt = c.get("format")
         if fmt not in ("vertical", "horizontal"):
             add("error", f"format 不正確：{fmt}")

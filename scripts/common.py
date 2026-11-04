@@ -15,6 +15,7 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
+CLIP_ID = r"[A-Za-z0-9_-]{1,32}"  # clip ids become file names, so keep them plain
 
 
 def load_json(path):
