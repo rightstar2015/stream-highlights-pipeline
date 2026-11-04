@@ -505,6 +505,16 @@ def main():
     hw, hh, hd = probe(W / "clips" / "h01_打王全過程.mp4")
     check((hw, hh) == (1920, 1080), "橫式維持原解析度")
     check(abs(hd - 29.5) < 0.3, f"橫式兩段跳剪 29.5s（實際 {hd:.2f}）")
+    hmp4 = W / "clips" / "h01_打王全過程.mp4"
+    lens = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "csv=p=0", str(hmp4)],
+                          capture_output=True, text=True).stdout.split()
+    vlen = float(next(x for x in lens if x.startswith("video")).split(",")[1])
+    alen = float(next(x for x in lens if x.startswith("audio")).split(",")[1])
+    check(abs(vlen - 29.5) <= 1 / 30 + 0.001 and abs(alen - vlen) < 0.03, f"跳剪：影像長度＝各段總和 ±1 格，聲音對齊（{vlen}、{alen}）")
+    sil = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(hmp4), "-af", "silencedetect=noise=-50dB:d=0.02",
+                          "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    gaps = [float(x.split("silence_start: ")[1].split()[0]) for x in sil.splitlines() if "silence_start" in x]
+    check(not [g for g in gaps if 21 < g < 23], f"跳剪：接點沒有長於 20 ms 的靜音（{gaps}）")
     srt = (W / "clips" / "v01_打王暴斃.srt").read_text(encoding="utf-8-sig")
     check("欸欸欸等一下等一下" in srt and "。" not in srt, "SRT 內容正確且無句尾標點")
 
@@ -512,7 +522,7 @@ def main():
                         "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     i_line = [l for l in r.stderr.splitlines() if l.strip().startswith("I:")][-1]
     lufs = float(i_line.split()[1])
-    check(abs(lufs + 14) < 1.5, f"響度約 -14 LUFS（實際 {lufs}）")
+    check(abs(lufs + 14) < 0.5, f"響度 -14 LUFS ±0.5（實際 {lufs}）")
 
     root = ET.parse(next(W.glob("*_premiere.xml"))).getroot()
     seqs = {s.find("name").text: s for s in root.iter("sequence")}
