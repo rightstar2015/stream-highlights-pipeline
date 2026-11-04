@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from common import (SKILL_DIR, atomic_write, find_config, load_config, load_json, normalize_segments, parse_ts, probe,
-                    source_to_clip_time, work_paths)
+                    source_to_clip_time, vfr_warning, work_paths)
 from cut_clips import clamp_crop, resolve_template
 
 STILL_SUFFIXES = {".png", ".jpg", ".jpeg"}
@@ -361,6 +361,8 @@ def main():
     vertical_mode = args.vertical or pcfg.get("vertical", "mp4")
     cards = pcfg.get("cards", [])
     sinfo = probe(src)
+    if vfr_warning(sinfo):
+        print("[提示] " + vfr_warning(sinfo))
     sfps = (sinfo["fps_num"], sinfo["fps_den"])
     manifest = {}
     mpath = paths["clips"] / "manifest.json"

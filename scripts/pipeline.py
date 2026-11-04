@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 from common import (CLIP_ID, SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
-                    parse_ts, probe, save_json, work_paths)
+                    parse_ts, probe, save_json, vfr_warning, work_paths)
 from validate_selections import validate
 
 SCRIPTS = SKILL_DIR / "scripts"
@@ -360,6 +360,12 @@ def main():
     log = paths["pipeline_log"]
     emit(log, "pipeline", "start", workdir=str(paths["dir"].resolve()), config=args.config)
 
+    try:
+        vfr = vfr_warning(probe(video))
+    except (RuntimeError, SystemExit, KeyError, ValueError):
+        vfr = None  # an unreadable file fails in the steps themselves, with their own message
+    if vfr:
+        emit(log, "check", "done", reason=vfr)
     meta_path = paths["dir"] / "analysis_meta.json"
     current = fingerprint(video, args)
     if meta_path.exists() and load_json(meta_path) != current and not args.force:

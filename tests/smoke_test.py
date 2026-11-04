@@ -674,6 +674,11 @@ def main():
     check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
           "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
 
+    # variable frame rate
+    from common import probe as probe_info, vfr_warning
+    check(vfr_warning(probe_info(video)) is None and "可變幀率" in vfr_warning({"fps": 60.0, "avg_fps": 58.9})
+          and vfr_warning({"fps": 60.0, "avg_fps": 59.97}) is None, "幀率：固定幀率不警告，平均差超過 1% 才警告")
+
     # clip ids become file names
     from validate_selections import validate
     from cut_clips import clip_stem

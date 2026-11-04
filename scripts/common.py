@@ -163,12 +163,24 @@ def probe(path):
         if st["codec_type"] == "video" and "width" not in info:
             num, den = (st.get("r_frame_rate") or "30/1").split("/")
             num, den = int(num), int(den or 1)
+            an, ad = (st.get("avg_frame_rate") or "0/0").split("/")
+            avg = int(an) / int(ad) if int(ad or 0) else 0.0
             info.update(width=int(st["width"]), height=int(st["height"]),
-                        fps_num=num, fps_den=den, fps=num / den)
+                        fps_num=num, fps_den=den, fps=num / den, avg_fps=avg)
         elif st["codec_type"] == "audio" and "audio_channels" not in info:
             info.update(audio_channels=int(st.get("channels", 2)),
                         audio_rate=int(st.get("sample_rate", 48000)))
     return info
+
+
+def vfr_warning(info):
+    """A warning when the stream looks variable frame rate (OBS recordings and some downloads are):
+    the nominal and average rates differ by more than 1%. Premiere's cuts drift on such files."""
+    fps, avg = info.get("fps") or 0, info.get("avg_fps") or 0
+    if not fps or not avg or abs(avg - fps) / fps <= 0.01:
+        return None
+    return (f"直播檔可能是可變幀率（標示 {fps:.3f} fps，平均 {avg:.3f} fps），Premiere 裡的剪點可能會漂移。"
+            f"建議先轉成固定幀率再分析：ffmpeg -i 直播.mp4 -fps_mode cfr -r {round(fps)} -c:a copy 直播_cfr.mp4")
 
 
 def work_paths(workdir):
