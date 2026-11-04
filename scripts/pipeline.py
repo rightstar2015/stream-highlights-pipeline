@@ -3,7 +3,7 @@
 Usage:
   python pipeline.py --video STREAM.mp4 [--url YOUTUBE_URL | --chat-file live_chat.json]
                      [--workdir WORK] [--config config.json] [--start 1:00:00 --end 1:20:00]
-                     [--model large-v3-turbo] [--no-separate] [--visual] [--force] [--auto-select]
+                     [--model MODEL] [--no-separate] [--visual] [--force] [--auto-select]
 
 Steps: transcribe / chat / audio run in parallel, then vocal -> signals -> frames.
 The slow visual step only runs with --visual or a non-zero signals.weights.visual in the config.
@@ -313,7 +313,7 @@ def main():
     ap.add_argument("--cookies-from-browser")
     ap.add_argument("--start")
     ap.add_argument("--end")
-    ap.add_argument("--model", default="large-v3-turbo", help="整場掃描用的轉錄模型")
+    ap.add_argument("--model", help="整場掃描用的轉錄模型（預設用 config 的 whisper.model）")
     ap.add_argument("--no-separate", action="store_true", help="不做人聲分離")
     ap.add_argument("--visual", action="store_true", help="也跑畫面分析（6 小時直播約 30 分鐘，預設權重 0）")
     ap.add_argument("--frames", type=int, default=20, help="候選截圖張數")
@@ -349,7 +349,7 @@ def main():
     rng = (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
 
     separate = not args.no_separate and has_separation()
-    tr = [PY, "transcribe.py", "--video", args.video, *base, *cfg, "--model", args.model, *rng]
+    tr = [PY, "transcribe.py", "--video", args.video, *base, *cfg, *(["--model", args.model] if args.model else []), *rng]
     if separate:
         tr.append("--separate")
     chat = None

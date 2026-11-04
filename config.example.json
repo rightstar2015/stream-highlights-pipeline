@@ -3,7 +3,8 @@
   "_language_profile_說明": "語言設定檔 languages/<名稱>.json：辨識語言、簡轉繁、關鍵字、字幕字數。這裡寫的項目會蓋過它。",
   "language_profile": "zh-TW",
   "whisper": {
-    "model": "large-v3",
+    "_model_說明": "整場掃描用，速度優先；精確字幕在出片前由 refine_model 重轉選定段落",
+    "model": "large-v3-turbo",
     "device": "auto",
     "compute_type": "auto",
     "hotwords": [],

@@ -574,7 +574,7 @@ def main():
     from common import load_config
     zh = load_config()
     check(zh["language"] == "zh" and zh["chinese_convert"] == "s2twp" and "笑死" in zh["chat_keywords"]
-          and zh["whisper"]["model"] == "large-v3", "語言設定：預設是台灣中文，其他預設還在")
+          and zh["whisper"]["model"] == "large-v3-turbo", "語言設定：預設是台灣中文，其他預設還在（整場掃描用 turbo）")
     lang_cfg = OUT / "lang.json"
     lang_cfg.write_text(json.dumps({"language_profile": "en", "chat_keywords": {"gg": 1.0}}), encoding="utf-8")
     en = load_config(lang_cfg)

@@ -49,11 +49,11 @@ python scripts/pipeline.py --video 直播.mp4 --url <YouTube網址>
 **個別執行**（可以三個一起在背景跑）：
 
 ```
-python scripts/transcribe.py   --video 直播.mp4 --workdir WORK --config config.json --model large-v3-turbo --separate
+python scripts/transcribe.py   --video 直播.mp4 --workdir WORK --config config.json --separate
 python scripts/fetch_chat.py   --url <YouTube網址> --workdir WORK
 python scripts/audio_energy.py --video 直播.mp4 --workdir WORK
 ```
-- 整場掃描用速度快的 `large-v3-turbo` 就好，精確字幕留到第 4 步用 `refine_transcript.py` 重轉。
+- 整場掃描的模型是 config 的 `whisper.model`（預設速度快的 `large-v3-turbo`），精確字幕留到第 4 步用 `refine_transcript.py` 重轉。
 - **遊戲直播建議加 `--separate`**：先用 Demucs 分離人聲再轉錄。實測（配樂很重的 10 分鐘遊戲直播）配樂造成的遊戲名幻覺從 3 次降到 0 次，而且因為人聲乾淨、VAD 能跳過更多空白，反而比較快。會在 WORK 留一個 `vocals16k.wav`。沒裝 torch／demucs 就不加。
 - 想先試流程可加 `--start 1:00:00 --end 1:20:00`。
 - 會員限定存檔抓聊天室：加 `--cookies-from-browser chrome`。
