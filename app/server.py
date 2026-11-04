@@ -31,7 +31,7 @@ from common import (atomic_output, default_workdir, find_config, fmt_ts, load_be
                     parse_ts, probe, save_json, work_paths)
 from cut_clips import clip_stem, resolve_template, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
-from tighten import load_energy, tighten_clip  # noqa: E402
+from tighten import audio_reader, load_energy, tighten_clip  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
 
 PY = sys.executable
@@ -515,7 +515,8 @@ class Handler(BaseHTTPRequestHandler):
         paths = work_paths(d["work"])
         meta = studio_meta(paths)
         segs, notes, removed = tighten_clip(d["clip"], transcript_for(paths), load_energy(paths["audio"]),
-                                            load_config(meta.get("config")))
+                                            load_config(meta.get("config")),
+                                            audio_reader(paths, project_source(paths, meta)))
         self.send_json({"segments": segs, "notes": notes, "removed": round(removed, 1)})
 
     def stop(self, d):

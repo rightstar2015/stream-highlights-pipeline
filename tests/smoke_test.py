@@ -663,6 +663,7 @@ def main():
 
     # cutting pauses inside segments
     from tighten import pauses, tighten_clip
+    from common import parse_ts as parse_ts_for, work_paths as work_paths_for
     from validate_selections import cuts_speech
     ws = [{"start": 10.0, "end": 11.0, "word": "a"}, {"start": 13.0, "end": 14.0, "word": "b"},
           {"start": 14.2, "end": 15.0, "word": "c"}, {"start": 18.0, "end": 19.0, "word": "d"}]
@@ -671,6 +672,35 @@ def main():
     energy = {t: -30.0 for t in range(0, 30)}
     energy[16] = -20.0
     check((15.2, 17.8) not in pauses(9, 20, ws, 0.8, 0.2, energy, 3), "剪掉停頓：停頓裡比說話大聲（笑聲）就保留")
+    # a laugh inside a short pause has no whole second of its own, but must still keep the pause
+    short = [{"start": 9.0, "end": 10.2, "word": "a"}, {"start": 12.0, "end": 12.5, "word": "b"}]
+    e2 = {t: -30.0 for t in range(0, 30)}
+    e2[10] = e2[11] = -12.0
+    check(pauses(9, 12.5, short, 0.8, 0.2, e2, 3) == [], "剪掉停頓：2 秒內的笑聲也會保留（每秒音量）")
+
+    # 50 ms loudness from vocals16k.wav: drawn-out endings stay, a loud laugh keeps its pause
+    import wave
+    from tighten import audio_reader
+    WF = OUT / "fine"
+    WF.mkdir()
+    sr = 16000
+    tt = np.arange(int(sr * 7.0)) / sr
+    amp = np.full(tt.shape, 0.001)
+    for a_, b_, v in ((0.5, 1.0, 0.3), (1.0, 1.5, 0.1), (3.0, 3.5, 0.3), (4.2, 5.0, 0.8), (6.0, 6.5, 0.3)):
+        amp[(tt >= a_) & (tt < b_)] = v  # words, a breathy tail after the first, a laugh in the second pause
+    with wave.open(str(WF / "vocals16k.wav"), "wb") as wv:
+        wv.setnchannels(1)
+        wv.setsampwidth(2)
+        wv.setframerate(sr)
+        wv.writeframes((np.sin(2 * np.pi * 300 * tt) * amp * 32767).astype(np.int16).tobytes())
+    fw = [{"start": 0.5, "end": 1.0, "word": "x"}, {"start": 3.0, "end": 3.5, "word": "y"}, {"start": 6.0, "end": 6.5, "word": "z"}]
+    read = audio_reader(work_paths_for(WF))
+    fsegs, _, fremoved = tighten_clip({"id": "f", "format": "horizontal", "segments": [[0.5, 6.5]]},
+                                      [{"start": 0.5, "end": 6.5, "text": "xyz", "words": fw}], {}, {}, read)
+    first_out = parse_ts_for(fsegs[0][1])
+    check(len(fsegs) == 2 and 1.6 <= first_out <= 1.8 and parse_ts_for(fsegs[1][0]) <= 2.9 and parse_ts_for(fsegs[1][1]) >= 6.4,
+          f"剪掉停頓：細時間音量保留拉長的字尾，停頓裡有笑聲就不剪（{fsegs}）")
+
     tc = {"id": "v", "format": "vertical", "segments": [{"in": 9, "out": 20, "crop": "face"}],
           "notes": [{"at": 12, "text": "被剪掉的時間"}, {"at": 13.5, "text": "原本就在"}]}
     tsg = [{"start": 10.0, "end": 19.0, "text": "abcd", "words": ws}]
