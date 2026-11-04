@@ -12,8 +12,8 @@ import argparse
 import re
 import sys
 
-from common import (CLIP_ID, fmt_ts, load_best_transcript, load_config, load_json, normalize_segments, probe, save_json,
-                    work_paths)
+from common import (CLIP_ID, fmt_ts, load_best_transcript, load_config, load_json, normalize_segments, parse_ts, probe,
+                    save_json, work_paths)
 from cut_clips import clip_stem
 
 MID_MARGIN = 0.15  # a cut this close to a sentence edge doesn't count as cutting into it
@@ -86,7 +86,6 @@ def validate(clips, cfg, duration=None, segs=()):
     """-> list of {"id", "level": "error" | "warning", "msg"}; every clip is checked."""
     issues = []
     limits = cfg.get("limits", {})
-    presets = cfg.get("vertical_layout", {}).get("crop_presets", {})
     seen, stems = set(), {}
 
     for c in clips:
@@ -108,6 +107,9 @@ def validate(clips, cfg, duration=None, segs=()):
         fmt = c.get("format")
         if fmt not in ("vertical", "horizontal"):
             add("error", f"format 不正確：{fmt}")
+        lay = {**cfg.get("vertical_layout", {}), **(c.get("layout") or {})}
+        presets = lay.get("crop_presets", {})
+        template = lay.get("mode", "template") == "template"
         try:
             times = normalize_segments(c)
         except (KeyError, IndexError, TypeError, ValueError):
@@ -129,6 +131,25 @@ def validate(clips, cfg, duration=None, segs=()):
                 add("warning", f"進點 {fmt_ts(s['a'])} 切在句子中間")
             if cuts_speech(segs, s["b"]):
                 add("warning", f"出點 {fmt_ts(s['b'])} 切在句子中間")
+        crops = [s.get("crop") for s in times]
+        default = lay.get("default_crop", "game")
+        if fmt == "vertical" and template and presets and None in crops and default not in presets:
+            add("error", f"有片段沒寫裁切，預設的「{default}」又不在 crop_presets 裡")
+        if fmt == "horizontal" and any(x is not None for x in crops):
+            add("warning", "橫式片段的裁切不會用到（只有直式會裁切）")
+        notes = c.get("notes", [])
+        if not isinstance(notes, list):
+            add("error", "notes 要是清單")
+            notes = []
+        for nt in notes:
+            try:
+                at = parse_ts(nt["at"])
+                str(nt["text"])
+            except (KeyError, TypeError, ValueError):
+                add("error", f"剪輯指示格式不正確（每則要有 at 和 text）：{nt}")
+                continue
+            if not any(s["a"] <= at <= s["b"] for s in times):
+                add("warning", f"剪輯指示「{nt['text']}」的時間 {fmt_ts(at)} 不在任何片段裡，不會出現在成品")
         ordered = sorted(times, key=lambda s: s["a"])
         if any(x["b"] > y["a"] for x, y in zip(ordered, ordered[1:])):
             add("warning", "片段之間有重疊，同一段畫面會出現兩次（倒敘開場可忽略）")

@@ -25,10 +25,10 @@ Writes WORK/clips/<id>_<title>.mp4 and .srt, plus clips/manifest.json.
 --preview renders one still per segment (fast check of crops / layout).
 """
 import argparse
+import json
 import math
 import re
-import shutil
-import tempfile
+import sys
 from pathlib import Path
 
 from common import (SKILL_DIR, atomic_output, atomic_write, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
@@ -228,12 +228,14 @@ def build_cues(tsegs, csegs, max_chars, pause):
                 merged[-1] = merged[-1] + [{"word": " ", "start": ln[0]["start"], "end": ln[0]["start"]}] + ln
             else:
                 merged.append(ln)
+        limit = offset + (b - a)  # a word's end can run past the cut; no cue may outlast its segment
         for ln in merged:
             txt = text_of(ln)
             if txt:
-                st = ln[0]["start"] - a + offset
-                en = ln[-1]["end"] - a + offset
-                cues.append([max(0.0, st), max(st + 0.5, en), txt])
+                st = max(0.0, ln[0]["start"] - a + offset)
+                en = min(max(st + 0.5, ln[-1]["end"] - a + offset), limit)
+                if en - st > 0.05:
+                    cues.append([st, en, txt])
         offset += b - a
     for i in range(len(cues) - 1):
         if cues[i][1] > cues[i + 1][0]:
@@ -256,6 +258,25 @@ def write_srt(cues, path):
 
 
 # ---------------- render ----------------
+
+FADE_SEC = 0.012  # audio fade at each cut
+
+
+def measure_loudness(inputs, audio_graph):
+    """First loudnorm pass over the joined audio -> its measurements (dict of strings)."""
+    r = run(["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex",
+             audio_graph + ";[ac]loudnorm=print_format=json[m]", "-map", "[m]", "-f", "null", "-"])
+    text = r.stderr
+    return json.loads(text[text.rindex("{"):text.rindex("}") + 1])
+
+
+def loudnorm_filter(lufs, m):
+    """Second pass: one fixed gain (linear=true) instead of riding the level, so a short clip doesn't
+    pump. loudnorm only stays linear when the target range is at least the measured one."""
+    lra = max(11.0, math.ceil(float(m["input_lra"])))
+    return (f"loudnorm=I={lufs}:TP=-1.5:LRA={lra}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+            f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:"
+            f"linear=true")
 
 def render(src, info, clip, cfg, out_mp4, preview=False):
     enc = cfg["encode"]
@@ -284,37 +305,55 @@ def render(src, info, clip, cfg, out_mp4, preview=False):
             outs.append(jpg)
         return outs
 
-    tmp = Path(tempfile.mkdtemp(prefix="vh_"))
-    parts = []
-    try:
+    lufs = enc.get("loudness_lufs")
+    audio = "audio_channels" in info
+    seg_inputs = []
+    for seg in clip["_segs"]:  # one seeked input per segment keeps each seek fast
+        seg_inputs += ["-ss", f"{seg['a']:.3f}", "-t", f"{seg['b'] - seg['a']:.3f}", "-i", str(src)]
+    n = len(clip["_segs"])
+
+    def audio_chain():
+        # a short fade at every cut, like Premiere's default audio transition, so cuts don't click
+        parts = []
         for i, seg in enumerate(clip["_segs"]):
-            part = tmp / f"p{i:03d}.mp4"
-            extra = ["-t", f"{seg['b'] - seg['a']:.3f}", "-map", "0:a:0?",
-                     "-c:v", "libx264", "-preset", enc["preset"], "-crf", str(enc["crf"]),
-                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", enc["audio_bitrate"],
-                     "-ar", "48000", "-ac", "2", str(part)]
-            run(seg_cmd(seg, seg["a"], extra))
-            parts.append(part)
-        joined = tmp / "joined.mp4"
-        if len(parts) == 1:
-            shutil.move(str(parts[0]), joined)
+            d = seg["b"] - seg["a"]
+            fade = min(FADE_SEC, d / 4)
+            parts.append(f"[{i}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,"
+                         f"afade=t=in:d={fade:.3f},afade=t=out:st={d - fade:.3f}:d={fade:.3f}[a{i}]")
+        return ";".join(parts) + ";" + "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[ac]"
+
+    norm = ""
+    if audio and lufs is not None:
+        m = measure_loudness(seg_inputs, audio_chain())
+        norm = loudnorm_filter(lufs, m)
+
+    # every segment is decoded once and the result encoded once: no AAC priming gaps between parts
+    vparts = []
+    for i, seg in enumerate(clip["_segs"]):
+        if vertical:
+            f = vertical_filter(lay, info["width"], info["height"], seg.get("crop"), False).replace("[0:v]", f"[{i}:v:0]")
+            vparts.append(re.sub(r"\[([a-z]+)\]", lambda mm: f"[{mm.group(1)}{i}]", f))  # labels unique per segment
         else:
-            lst = tmp / "list.txt"
-            lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
-            run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
-                 "-c", "copy", str(joined)])
-        lufs = enc.get("loudness_lufs")
-        if lufs is not None:
-            # whole-clip loudness normalisation; video is copied untouched
-            with atomic_output(out_mp4) as tmp_mp4:
-                run(["ffmpeg", "-y", "-v", "error", "-i", str(joined), "-c:v", "copy",
-                     "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11", "-c:a", "aac",
-                     "-b:a", enc["audio_bitrate"], "-ar", "48000", "-movflags", "+faststart", str(tmp_mp4)])
-        else:
-            with atomic_output(out_mp4) as tmp_mp4:  # the temp dir may be on another drive: move, then rename
-                shutil.move(str(joined), tmp_mp4)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+            vparts.append(f"[{i}:v:0]setsar=1[out{i}]")
+    graph = ";".join(vparts) + ";" + "".join(f"[out{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
+    cmd = ["ffmpeg", "-y", "-v", "error", *seg_inputs]
+    vout = "vc"
+    if tpl:
+        W, H = lay["output_size"]
+        cmd += ["-loop", "1", "-i", str(tpl)]
+        graph += f";[{n}:v]scale={W}:{H},format=rgba[tpl];[vc][tpl]overlay=0:0:shortest=1[vt]"
+        vout = "vt"
+    maps = ["-map", f"[{vout}]"]
+    if audio:
+        graph += ";" + audio_chain()
+        if norm:
+            graph += f";[ac]{norm},aresample=48000[an]"
+        maps += ["-map", "[an]" if norm else "[ac]"]
+    with atomic_output(out_mp4) as tmp_mp4:
+        run(cmd + ["-filter_complex", graph, *maps,
+                   "-c:v", "libx264", "-preset", enc["preset"], "-crf", str(enc["crf"]), "-pix_fmt", "yuv420p",
+                   "-c:a", "aac", "-b:a", enc["audio_bitrate"], "-ar", "48000", "-ac", "2",
+                   "-movflags", "+faststart", str(tmp_mp4)])
     return out_mp4
 
 
@@ -338,47 +377,59 @@ def main():
     paths["clips"].mkdir(exist_ok=True)
     sub = cfg["subtitles"]
 
-    manifest = []
+    manifest, failed = [], []
+    def make(clip):
+            clip["_segs"] = normalize_segments(clip)
+            for s in clip["_segs"]:
+                if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
+                    raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
+            length = sum(s["b"] - s["a"] for s in clip["_segs"])
+            base = paths["clips"] / clip_stem(clip)
+            out = base.with_suffix(".mp4")
+            print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
+                  ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")
+                            for s in clip["_segs"]))
+            if args.srt_only:
+                if not out.exists():
+                    raise SystemExit(f"[錯誤] 找不到 {out.name}，請先不加 --srt-only 輸出一次")
+                res = out
+            else:
+                res = render(src, info, clip, cfg, out, preview=args.preview)
+            if args.preview:
+                for r in res:
+                    print(f"   → {r}")
+                return None
+            notes = []
+            for n in clip.get("notes", []):
+                t = source_to_clip_time(clip["_segs"], parse_ts(n["at"]))
+                if t is not None:
+                    notes.append({"t": round(t, 3), "text": n["text"]})
+            entry = {"id": clip["id"], "format": clip["format"], "title": clip.get("title", ""),
+                     "header_title": clip.get("header_title", ""),
+                     "length_sec": round(length, 2), "file": str(res),
+                     "segments": [[s["a"], s["b"]] for s in clip["_segs"]], "notes": notes}
+            mx = sub["vertical_max_chars"] if clip["format"] == "vertical" else sub["horizontal_max_chars"]
+            cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"])
+            if cues:
+                write_srt(cues, base.with_suffix(".srt"))
+                entry["srt"] = str(base.with_suffix(".srt"))
+                entry["subtitle_lines"] = len(cues)
+            print(f"   → {res}")
+            return entry
+
     for clip in sel["clips"]:
         if args.only and clip["id"] not in args.only:
             continue
-        clip["_segs"] = normalize_segments(clip)
-        for s in clip["_segs"]:
-            if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
-                raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
-        length = sum(s["b"] - s["a"] for s in clip["_segs"])
-        base = paths["clips"] / clip_stem(clip)
-        out = base.with_suffix(".mp4")
-        print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
-              ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")
-                        for s in clip["_segs"]))
-        if args.srt_only:
-            if not out.exists():
-                raise SystemExit(f"[錯誤] 找不到 {out.name}，請先不加 --srt-only 輸出一次")
-            res = out
-        else:
-            res = render(src, info, clip, cfg, out, preview=args.preview)
-        if args.preview:
-            for r in res:
-                print(f"   → {r}")
+        try:
+            entry = make(clip)
+        except (SystemExit, RuntimeError, OSError, KeyError, ValueError) as e:
+            # one bad clip must not cost the others: note it and carry on
+            msg = str(e).strip().splitlines()[-1] if str(e).strip() else type(e).__name__
+            failed.append((clip.get("id"), msg))
+            print(f"   ✗ {clip.get('id')} 失敗：{msg}")
             continue
-        notes = []
-        for n in clip.get("notes", []):
-            t = source_to_clip_time(clip["_segs"], parse_ts(n["at"]))
-            if t is not None:
-                notes.append({"t": round(t, 3), "text": n["text"]})
-        entry = {"id": clip["id"], "format": clip["format"], "title": clip.get("title", ""),
-                 "header_title": clip.get("header_title", ""),
-                 "length_sec": round(length, 2), "file": str(res),
-                 "segments": [[s["a"], s["b"]] for s in clip["_segs"]], "notes": notes}
-        mx = sub["vertical_max_chars"] if clip["format"] == "vertical" else sub["horizontal_max_chars"]
-        cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"])
-        if cues:
-            write_srt(cues, base.with_suffix(".srt"))
-            entry["srt"] = str(base.with_suffix(".srt"))
-            entry["subtitle_lines"] = len(cues)
-        manifest.append(entry)
-        print(f"   → {res}")
+        if entry:
+            manifest.append(entry)
     if not args.preview:
         # with --only, keep the other clips' entries so export_premiere_xml.py still sees every clip
         mpath = paths["clips"] / "manifest.json"
@@ -389,6 +440,11 @@ def main():
         allc.sort(key=lambda e: order.index(e["id"]) if e["id"] in order else len(order))
         save_json({"source": str(src), "clips": allc}, mpath)
     print(f"完成 {len(manifest) if not args.preview else '預覽'}")
+    if failed:
+        names = "、".join(f"{i}（{m}）" for i, m in failed)
+        print(f"[錯誤] {len(failed)} 支沒有輸出：{names}")
+        print("@@ " + json.dumps({"step": "失敗的片段", "status": "fail", "reason": names}, ensure_ascii=False))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

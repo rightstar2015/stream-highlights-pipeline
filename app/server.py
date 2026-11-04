@@ -115,8 +115,10 @@ class Job:
         return True
 
     def start(self, kind, work, cmds):
-        """cmds: list of (label, argv) or (label, argv, fallback). Run in order and stop at the first
-        failure. fallback: a list of argv to try next; when all fail, the job goes on with a warning."""
+        """cmds: list of (label, argv), (label, argv, fallback) or (label, argv, fallback, keep_going).
+        Run in order and stop at the first failure. fallback: a list of argv to try next; when all
+        fail, the job goes on with a warning. keep_going: a failure is reported, the next steps still
+        run, and the job ends as failed."""
         with self.lock:
             if self.running:
                 return False
@@ -127,10 +129,11 @@ class Job:
         return True
 
     def _run(self, cmds):
-        rc = 0
+        rc, first_fail = 0, 0
         for cmd in cmds:
             label, argv = cmd[0], cmd[1]
             fallbacks = cmd[2] if len(cmd) > 2 else None
+            keep_going = len(cmd) > 3 and cmd[3]
             if label:
                 self._event({"step": label, "status": "start"})
             rc = self._exec(argv)
@@ -146,11 +149,14 @@ class Job:
                 continue
             if label:
                 self._event({"step": label, "status": "done" if rc == 0 else "fail"})
+            if rc != 0 and keep_going and not self.stopping:
+                first_fail = first_fail or rc
+                continue
             if rc != 0:
                 break
         with self.lock:
             self.running, self.proc = False, None
-            self.rc = -1 if self.stopping else rc
+            self.rc = -1 if self.stopping else (rc or first_fail)
         self.persist()
 
     def _exec(self, argv):
@@ -483,7 +489,7 @@ class Handler(BaseHTTPRequestHandler):
         if d.get("refine"):
             refine = [PY, "refine_transcript.py", "--workdir", work, *cfg, *pick]
             cmds.append(("高品質重轉字幕", refine, [[*refine, "--no-separate"]]))
-        cmds += [("輸出影片與字幕", [PY, "cut_clips.py", "--workdir", work, *cfg, *pick]),
+        cmds += [("輸出影片與字幕", [PY, "cut_clips.py", "--workdir", work, *cfg, *pick], None, True),
                  ("Premiere XML", [PY, "export_premiere_xml.py", "--workdir", work, *cfg])]
         if not JOB.start("render", work, cmds):
             return self.send_json({"error": "已有工作在執行中"}, 409)

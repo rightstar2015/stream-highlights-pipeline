@@ -242,6 +242,10 @@ def main():
     check(studio.JOB.start("render", str(W2), [("慢", slow)]), "工作：可以啟動")
     time.sleep(1)
     check(status("/api/stop", {}) == 200 and wait_job()["rc"] == -1, "工作：可以停止")
+    studio.JOB.start("render", str(W2), [("出片", fail, None, True), ("XML", [PY, "-c", "print('xml')"])])
+    j = wait_job()
+    check(j["rc"] == 3 and any(e["step"] == "XML" and e["status"] == "done" for e in j["events"]),
+          "工作：出片有失敗時仍會產生 XML，最後顯示失敗")
     tg = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/tighten", data=json.dumps(
         {"work": str(W2), "clip": {"id": "v", "format": "vertical", "segments": [{"in": 95, "out": 115}]}}).encode(),
         headers={"Content-Type": "application/json"})).read())
@@ -495,6 +499,18 @@ def main():
          "segments": [[90, 112], {"in": 197.5, "out": 205}],
          "notes": [{"at": "1:42", "text": "放大臉"}, {"at": "2:30", "text": "（被剪掉，不應出現）"}]}]}
     (W / "selections.json").write_text(json.dumps(sel, ensure_ascii=False), encoding="utf-8")
+    # one clip out of range: the other is still rendered and listed, and the run reports the failure
+    WK = OUT / "keep_going"
+    WK.mkdir()
+    shutil.copy(W / "transcript.json", WK / "transcript.json")
+    (WK / "selections.json").write_text(json.dumps({"source": str(video), "clips": [
+        {"id": "bad", "format": "horizontal", "title": "超出", "segments": [[290, 400]]},
+        {"id": "ok", "format": "horizontal", "title": "正常", "segments": [[10, 12]]}]}, ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run([PY, "cut_clips.py", "--workdir", str(WK)], cwd=SCRIPTS, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    man = json.loads((WK / "clips" / "manifest.json").read_text(encoding="utf-8"))
+    check(r.returncode == 1 and [c["id"] for c in man["clips"]] == ["ok"] and "bad" in r.stdout and "失敗的片段" in r.stdout,
+          "出片：一支失敗時其他照樣輸出、寫進 manifest，最後回報失敗")
     sh("cut_clips.py", "--workdir", W, "--preview")
     sh("cut_clips.py", "--workdir", W)
     sh("export_premiere_xml.py", "--workdir", W)
@@ -505,6 +521,16 @@ def main():
     hw, hh, hd = probe(W / "clips" / "h01_打王全過程.mp4")
     check((hw, hh) == (1920, 1080), "橫式維持原解析度")
     check(abs(hd - 29.5) < 0.3, f"橫式兩段跳剪 29.5s（實際 {hd:.2f}）")
+    hmp4 = W / "clips" / "h01_打王全過程.mp4"
+    lens = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "csv=p=0", str(hmp4)],
+                          capture_output=True, text=True).stdout.split()
+    vlen = float(next(x for x in lens if x.startswith("video")).split(",")[1])
+    alen = float(next(x for x in lens if x.startswith("audio")).split(",")[1])
+    check(abs(vlen - 29.5) <= 1 / 30 + 0.001 and abs(alen - vlen) < 0.03, f"跳剪：影像長度＝各段總和 ±1 格，聲音對齊（{vlen}、{alen}）")
+    sil = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(hmp4), "-af", "silencedetect=noise=-50dB:d=0.02",
+                          "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    gaps = [float(x.split("silence_start: ")[1].split()[0]) for x in sil.splitlines() if "silence_start" in x]
+    check(not [g for g in gaps if 21 < g < 23], f"跳剪：接點沒有長於 20 ms 的靜音（{gaps}）")
     srt = (W / "clips" / "v01_打王暴斃.srt").read_text(encoding="utf-8-sig")
     check("欸欸欸等一下等一下" in srt and "。" not in srt, "SRT 內容正確且無句尾標點")
 
@@ -512,7 +538,7 @@ def main():
                         "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     i_line = [l for l in r.stderr.splitlines() if l.strip().startswith("I:")][-1]
     lufs = float(i_line.split()[1])
-    check(abs(lufs + 14) < 1.5, f"響度約 -14 LUFS（實際 {lufs}）")
+    check(abs(lufs + 14) < 0.5, f"響度 -14 LUFS ±0.5（實際 {lufs}）")
 
     root = ET.parse(next(W.glob("*_premiere.xml"))).getroot()
     seqs = {s.find("name").text: s for s in root.iter("sequence")}
@@ -648,6 +674,23 @@ def main():
     check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
           "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
 
+    # more checks before rendering
+    lay_cfg = {"vertical_layout": {"default_crop": "missing", "crop_presets": {"game": [0, 0, 10, 10]}}}
+    msgs = [i["msg"] for i in validate([{"id": "v1", "format": "vertical", "segments": [[1, 5]]}], lay_cfg, None)]
+    check(any("預設的「missing」" in m for m in msgs), "選片檢查：沒寫裁切時，預設裁切不存在是錯誤")
+    msgs = [(i["level"], i["msg"]) for i in validate([{"id": "h1", "format": "horizontal", "segments": [
+        {"in": 1, "out": 5, "crop": "game"}], "notes": [{"at": 3, "text": "在裡面"}, {"at": 9, "text": "剪掉了"},
+                                                       {"text": "沒有時間"}]}], {}, None)]
+    check(("warning", "橫式片段的裁切不會用到（只有直式會裁切）") in msgs
+          and any(lv == "warning" and "剪掉了" in m for lv, m in msgs) and not any("在裡面" in m for _, m in msgs)
+          and any(lv == "error" and "格式不正確" in m for lv, m in msgs),
+          f"選片檢查：橫式寫裁切、剪輯指示在片段外是提醒，指示格式不對是錯誤（{msgs}）")
+
+    # variable frame rate
+    from common import probe as probe_info, vfr_warning
+    check(vfr_warning(probe_info(video)) is None and "可變幀率" in vfr_warning({"fps": 60.0, "avg_fps": 58.9})
+          and vfr_warning({"fps": 60.0, "avg_fps": 59.97}) is None, "幀率：固定幀率不警告，平均差超過 1% 才警告")
+
     # clip ids become file names
     from validate_selections import validate
     from cut_clips import clip_stem
@@ -723,6 +766,13 @@ def main():
     check(notes[0]["at"] == "00:00:12.800" and notes[1] == tc["notes"][1], "剪掉停頓：落在剪掉處的標記移到下一段開頭")
     check(not cuts_speech(tsg, 12.8) and cuts_speech(tsg, 10.5) and cuts_speech(tsg, 14.1),
           "選片檢查：剪在字之間的長停頓不算切在句子中間，切到字或短間隔才算")
+
+    # the last cue of a segment ends with the segment, even when its last word runs past the cut
+    from cut_clips import build_cues
+    tail =[{"start": 0, "end": 3.5, "text": "最後一句", "words": [
+        {"start": 2.0, "end": 2.4, "word": "最後"}, {"start": 2.6, "end": 3.3, "word": "一句"}]}]
+    cues_t = build_cues(tail, [{"a": 0, "b": 3.0}, {"a": 10, "b": 12}], 12, 0.5)
+    check(cues_t and "一句" in cues_t[-1][2] and cues_t[-1][1] <= 3.0, f"字幕：最後一句不超出片段（{cues_t}）")
 
     # subtitle splitting: never across Whisper segments, long phrases split evenly
     from cut_clips import build_cues
