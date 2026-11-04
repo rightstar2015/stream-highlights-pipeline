@@ -311,6 +311,22 @@ def main():
           "版型校正：只改裁切，設定檔其他內容不動")
     check(merged["game"] == [400, 10, 1000, 1080] and merged["game_pip"]["pip"]["region"] == [5, 6, 100, 100]
           and "face" in merged, "版型校正：存檔後出片讀得到新範圍，其他裁切還在")
+    # settings file: concurrent writers don't lose projects, a broken file is kept aside
+    keep = studio.SETTINGS
+    studio.SETTINGS = OUT / "race_settings.json"
+    works = [str(OUT / f"race{i}") for i in range(8)]
+    threads = [threading.Thread(target=studio.remember, args=(w, None)) for w in works]
+    threads += [threading.Thread(target=studio.JOB.persist) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    check({r["work"] for r in studio.settings()["recent"]} == set(works) and "last_job" in studio.settings(),
+          "設定檔：同時寫入不會掉專案")
+    studio.SETTINGS.write_text('{"recent": [', encoding="utf-8")
+    check(studio.settings() == {"recent": []} and studio.SETTINGS.with_name("race_settings.json.bad").exists(),
+          "設定檔：壞掉的檔案改名保留，不會默默清空")
+    studio.SETTINGS = keep
     srv.shutdown()
 
     # headless picks: Claude's printed result is validated before anything is written

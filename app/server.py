@@ -41,18 +41,39 @@ REVIEW_STATE = "review_state.json"  # every clip on the review page, checked or 
 PROJECT_MARKERS = ("candidates.json", "studio.json", "selections.json")
 
 
+SETTINGS_LOCK = threading.RLock()  # request threads and the job thread all read-modify-write the file
+
+
 def settings():
-    try:
-        return load_json(SETTINGS)
-    except Exception:
-        return {"recent": []}
+    with SETTINGS_LOCK:
+        if not SETTINGS.exists():
+            return {"recent": []}
+        try:
+            return load_json(SETTINGS)
+        except (ValueError, OSError) as e:
+            # keep the broken file for the user instead of quietly overwriting it with an empty list
+            bad = SETTINGS.with_name(SETTINGS.name + ".bad")
+            try:
+                os.replace(SETTINGS, bad)
+            except OSError:
+                pass
+            print(f"[提示] 讀不到 {SETTINGS}（{e}），已改名成 {bad.name}；最近的專案清單從空的開始")
+            return {"recent": []}
+
+
+def update_settings(change):
+    """Read, change and save the settings file as one step."""
+    with SETTINGS_LOCK:
+        s = settings()
+        change(s)
+        save_json(s, SETTINGS)
 
 
 def remember(work, video):
-    s = settings()
-    rec = [r for r in s.get("recent", []) if r["work"] != work]
-    s["recent"] = [{"work": work, "video": video}] + rec[:9]
-    save_json(s, SETTINGS)
+    def change(s):
+        rec = [r for r in s.get("recent", []) if r["work"] != work]
+        s["recent"] = [{"work": work, "video": video}] + rec[:9]
+    update_settings(change)
 
 
 # ---------------------------------------------------------------- background job
@@ -71,9 +92,8 @@ class Job:
 
     def persist(self):
         """Keep the last job in the settings file, so a restart can report one that never finished."""
-        s = settings()
-        s["last_job"] = self.snapshot()
-        save_json(s, SETTINGS)
+        snap = self.snapshot()
+        update_settings(lambda s: s.__setitem__("last_job", snap))
 
     def restore(self):
         last = settings().get("last_job")
