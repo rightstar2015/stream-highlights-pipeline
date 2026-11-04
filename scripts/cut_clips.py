@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 from common import (SKILL_DIR, atomic_output, atomic_write, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
@@ -376,47 +377,59 @@ def main():
     paths["clips"].mkdir(exist_ok=True)
     sub = cfg["subtitles"]
 
-    manifest = []
+    manifest, failed = [], []
+    def make(clip):
+            clip["_segs"] = normalize_segments(clip)
+            for s in clip["_segs"]:
+                if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
+                    raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
+            length = sum(s["b"] - s["a"] for s in clip["_segs"])
+            base = paths["clips"] / clip_stem(clip)
+            out = base.with_suffix(".mp4")
+            print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
+                  ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")
+                            for s in clip["_segs"]))
+            if args.srt_only:
+                if not out.exists():
+                    raise SystemExit(f"[錯誤] 找不到 {out.name}，請先不加 --srt-only 輸出一次")
+                res = out
+            else:
+                res = render(src, info, clip, cfg, out, preview=args.preview)
+            if args.preview:
+                for r in res:
+                    print(f"   → {r}")
+                return None
+            notes = []
+            for n in clip.get("notes", []):
+                t = source_to_clip_time(clip["_segs"], parse_ts(n["at"]))
+                if t is not None:
+                    notes.append({"t": round(t, 3), "text": n["text"]})
+            entry = {"id": clip["id"], "format": clip["format"], "title": clip.get("title", ""),
+                     "header_title": clip.get("header_title", ""),
+                     "length_sec": round(length, 2), "file": str(res),
+                     "segments": [[s["a"], s["b"]] for s in clip["_segs"]], "notes": notes}
+            mx = sub["vertical_max_chars"] if clip["format"] == "vertical" else sub["horizontal_max_chars"]
+            cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"])
+            if cues:
+                write_srt(cues, base.with_suffix(".srt"))
+                entry["srt"] = str(base.with_suffix(".srt"))
+                entry["subtitle_lines"] = len(cues)
+            print(f"   → {res}")
+            return entry
+
     for clip in sel["clips"]:
         if args.only and clip["id"] not in args.only:
             continue
-        clip["_segs"] = normalize_segments(clip)
-        for s in clip["_segs"]:
-            if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
-                raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
-        length = sum(s["b"] - s["a"] for s in clip["_segs"])
-        base = paths["clips"] / clip_stem(clip)
-        out = base.with_suffix(".mp4")
-        print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
-              ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")
-                        for s in clip["_segs"]))
-        if args.srt_only:
-            if not out.exists():
-                raise SystemExit(f"[錯誤] 找不到 {out.name}，請先不加 --srt-only 輸出一次")
-            res = out
-        else:
-            res = render(src, info, clip, cfg, out, preview=args.preview)
-        if args.preview:
-            for r in res:
-                print(f"   → {r}")
+        try:
+            entry = make(clip)
+        except (SystemExit, RuntimeError, OSError, KeyError, ValueError) as e:
+            # one bad clip must not cost the others: note it and carry on
+            msg = str(e).strip().splitlines()[-1] if str(e).strip() else type(e).__name__
+            failed.append((clip.get("id"), msg))
+            print(f"   ✗ {clip.get('id')} 失敗：{msg}")
             continue
-        notes = []
-        for n in clip.get("notes", []):
-            t = source_to_clip_time(clip["_segs"], parse_ts(n["at"]))
-            if t is not None:
-                notes.append({"t": round(t, 3), "text": n["text"]})
-        entry = {"id": clip["id"], "format": clip["format"], "title": clip.get("title", ""),
-                 "header_title": clip.get("header_title", ""),
-                 "length_sec": round(length, 2), "file": str(res),
-                 "segments": [[s["a"], s["b"]] for s in clip["_segs"]], "notes": notes}
-        mx = sub["vertical_max_chars"] if clip["format"] == "vertical" else sub["horizontal_max_chars"]
-        cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"])
-        if cues:
-            write_srt(cues, base.with_suffix(".srt"))
-            entry["srt"] = str(base.with_suffix(".srt"))
-            entry["subtitle_lines"] = len(cues)
-        manifest.append(entry)
-        print(f"   → {res}")
+        if entry:
+            manifest.append(entry)
     if not args.preview:
         # with --only, keep the other clips' entries so export_premiere_xml.py still sees every clip
         mpath = paths["clips"] / "manifest.json"
@@ -427,6 +440,11 @@ def main():
         allc.sort(key=lambda e: order.index(e["id"]) if e["id"] in order else len(order))
         save_json({"source": str(src), "clips": allc}, mpath)
     print(f"完成 {len(manifest) if not args.preview else '預覽'}")
+    if failed:
+        names = "、".join(f"{i}（{m}）" for i, m in failed)
+        print(f"[錯誤] {len(failed)} 支沒有輸出：{names}")
+        print("@@ " + json.dumps({"step": "失敗的片段", "status": "fail", "reason": names}, ensure_ascii=False))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -242,6 +242,10 @@ def main():
     check(studio.JOB.start("render", str(W2), [("慢", slow)]), "工作：可以啟動")
     time.sleep(1)
     check(status("/api/stop", {}) == 200 and wait_job()["rc"] == -1, "工作：可以停止")
+    studio.JOB.start("render", str(W2), [("出片", fail, None, True), ("XML", [PY, "-c", "print('xml')"])])
+    j = wait_job()
+    check(j["rc"] == 3 and any(e["step"] == "XML" and e["status"] == "done" for e in j["events"]),
+          "工作：出片有失敗時仍會產生 XML，最後顯示失敗")
     tg = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/tighten", data=json.dumps(
         {"work": str(W2), "clip": {"id": "v", "format": "vertical", "segments": [{"in": 95, "out": 115}]}}).encode(),
         headers={"Content-Type": "application/json"})).read())
@@ -495,6 +499,18 @@ def main():
          "segments": [[90, 112], {"in": 197.5, "out": 205}],
          "notes": [{"at": "1:42", "text": "放大臉"}, {"at": "2:30", "text": "（被剪掉，不應出現）"}]}]}
     (W / "selections.json").write_text(json.dumps(sel, ensure_ascii=False), encoding="utf-8")
+    # one clip out of range: the other is still rendered and listed, and the run reports the failure
+    WK = OUT / "keep_going"
+    WK.mkdir()
+    shutil.copy(W / "transcript.json", WK / "transcript.json")
+    (WK / "selections.json").write_text(json.dumps({"source": str(video), "clips": [
+        {"id": "bad", "format": "horizontal", "title": "超出", "segments": [[290, 400]]},
+        {"id": "ok", "format": "horizontal", "title": "正常", "segments": [[10, 12]]}]}, ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run([PY, "cut_clips.py", "--workdir", str(WK)], cwd=SCRIPTS, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    man = json.loads((WK / "clips" / "manifest.json").read_text(encoding="utf-8"))
+    check(r.returncode == 1 and [c["id"] for c in man["clips"]] == ["ok"] and "bad" in r.stdout and "失敗的片段" in r.stdout,
+          "出片：一支失敗時其他照樣輸出、寫進 manifest，最後回報失敗")
     sh("cut_clips.py", "--workdir", W, "--preview")
     sh("cut_clips.py", "--workdir", W)
     sh("export_premiere_xml.py", "--workdir", W)
