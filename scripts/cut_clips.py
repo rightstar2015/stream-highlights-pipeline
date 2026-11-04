@@ -31,7 +31,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from common import (SKILL_DIR, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
+from common import (SKILL_DIR, atomic_output, atomic_write, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
                     normalize_segments, parse_ts, probe, run, save_json,
                     source_to_clip_time, work_paths)
 
@@ -113,6 +113,12 @@ def vertical_filter(lay, sw, sh, crop=None, has_template=False):
 def safe_name(s):
     s = re.sub(r'[\\/:*?"<>|\s]+', "_", s or "").strip("_")
     return s[:40]
+
+
+def clip_stem(clip):
+    """File name (no extension) of a clip's MP4/SRT. The id is cleaned too, as a second guard
+    behind validate_selections: a hand-typed id must never point outside clips/."""
+    return f"{safe_name(str(clip['id'])).strip('.')}_{safe_name(clip.get('title'))}"
 
 
 # ---------------- subtitles ----------------
@@ -244,7 +250,7 @@ def srt_time(t):
 
 
 def write_srt(cues, path):
-    with open(path, "w", encoding="utf-8-sig") as f:  # BOM helps Premiere on Windows
+    with atomic_write(path, encoding="utf-8-sig") as f:  # BOM helps Premiere on Windows
         for i, (st, en, txt) in enumerate(cues, 1):
             f.write(f"{i}\n{srt_time(st)} --> {srt_time(en)}\n{txt}\n\n")
 
@@ -300,11 +306,13 @@ def render(src, info, clip, cfg, out_mp4, preview=False):
         lufs = enc.get("loudness_lufs")
         if lufs is not None:
             # whole-clip loudness normalisation; video is copied untouched
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(joined), "-c:v", "copy",
-                 "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11", "-c:a", "aac",
-                 "-b:a", enc["audio_bitrate"], "-ar", "48000", "-movflags", "+faststart", str(out_mp4)])
+            with atomic_output(out_mp4) as tmp_mp4:
+                run(["ffmpeg", "-y", "-v", "error", "-i", str(joined), "-c:v", "copy",
+                     "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11", "-c:a", "aac",
+                     "-b:a", enc["audio_bitrate"], "-ar", "48000", "-movflags", "+faststart", str(tmp_mp4)])
         else:
-            shutil.move(str(joined), out_mp4)
+            with atomic_output(out_mp4) as tmp_mp4:  # the temp dir may be on another drive: move, then rename
+                shutil.move(str(joined), tmp_mp4)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return out_mp4
@@ -339,7 +347,7 @@ def main():
             if not (0 <= s["a"] < s["b"] <= info["duration"] + 0.5):
                 raise SystemExit(f"[錯誤] {clip['id']} 的區段 {s['a']}-{s['b']} 超出影片範圍")
         length = sum(s["b"] - s["a"] for s in clip["_segs"])
-        base = paths["clips"] / f"{clip['id']}_{safe_name(clip.get('title'))}"
+        base = paths["clips"] / clip_stem(clip)
         out = base.with_suffix(".mp4")
         print(f"{clip['id']} [{clip['format']}] {length:.1f}s ← " +
               ", ".join(f"{fmt_ts(s['a'])}-{fmt_ts(s['b'])}" + (f"({s['crop']})" if s.get("crop") else "")

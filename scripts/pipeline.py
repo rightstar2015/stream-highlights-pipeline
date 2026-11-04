@@ -3,7 +3,7 @@
 Usage:
   python pipeline.py --video STREAM.mp4 [--url YOUTUBE_URL | --chat-file live_chat.json]
                      [--workdir WORK] [--config config.json] [--start 1:00:00 --end 1:20:00]
-                     [--model large-v3-turbo] [--no-separate] [--visual] [--force] [--auto-select]
+                     [--model MODEL] [--no-separate] [--visual] [--force] [--auto-select]
 
 Steps: transcribe / chat / audio run in parallel, then vocal -> signals -> frames.
 The slow visual step only runs with --visual or a non-zero signals.weights.visual in the config.
@@ -22,14 +22,16 @@ import argparse
 import importlib.util
 import json
 import os
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-from common import (SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
+from common import (CLIP_ID, SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
                     parse_ts, probe, save_json, work_paths)
 from validate_selections import validate
 
@@ -56,8 +58,15 @@ class Step:
     def done(self):
         p = Path(self.output)
         if p.is_dir():
-            return any(p.iterdir())
-        return p.exists() and p.stat().st_size > 0
+            return any(".part." not in f.name for f in p.iterdir())
+        if not (p.exists() and p.stat().st_size > 0):
+            return False
+        if p.suffix == ".json":  # a cut-off file (written before atomic writes, or by hand) isn't done
+            try:
+                load_json(p)
+            except ValueError:
+                return False
+        return True
 
 
 def start(step, logdir):
@@ -201,7 +210,7 @@ def parse_auto_output(text, source):
         raise ValueError("候選清單或 clips 是空的")
     out, seen = [], set()
     for c in clips:
-        if not isinstance(c, dict) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(c.get("id", ""))):
+        if not isinstance(c, dict) or not re.fullmatch(CLIP_ID, str(c.get("id", ""))):
             raise ValueError(f"片段 id 不正確：{c.get('id') if isinstance(c, dict) else c!r}")
         if c["id"] in seen:
             raise ValueError(f"片段 id 重複：{c['id']}")
@@ -233,6 +242,23 @@ def find_claude():
     return None
 
 
+def make_sandbox(dst):
+    """The files the unattended Claude needs, copied to dst so it runs there instead of in the Skill
+    folder. Anything else in that folder (evaluation data from other streams, test output, virtual
+    environments) is then out of its reach, and can't bias its picks."""
+    dst = Path(dst)
+    shutil.copy2(SKILL_DIR / "SKILL.md", dst / "SKILL.md")
+    shutil.copy2(SKILL_DIR / "config.example.json", dst / "config.example.json")
+    shutil.copytree(SKILL_DIR / "languages", dst / "languages")
+    (dst / "scripts").mkdir()
+    for f in (SKILL_DIR / "scripts").glob("*.py"):  # frames.py needs common.py; cut_clips.py documents the format
+        shutil.copy2(f, dst / "scripts" / f.name)
+    (dst / "references").mkdir()
+    for f in (SKILL_DIR / "references").glob("*.md"):
+        shutil.copy2(f, dst / "references" / f.name)
+    return dst
+
+
 def auto_select(args, paths, log):
     claude = find_claude()
     if not claude:
@@ -243,22 +269,28 @@ def auto_select(args, paths, log):
         return True
     limits = load_config(args.config).get("auto_select", {})
     lines = sum(1 for _ in open(paths["transcript_txt"], encoding="utf-8")) if paths["transcript_txt"].exists() else 0
-    prompt = AUTO_PROMPT.format(skill=SKILL_DIR, video=args.video, work=paths["dir"].resolve(),
+    sandbox = Path(tempfile.mkdtemp(prefix="shp_auto_"))
+    make_sandbox(sandbox)
+    prompt = AUTO_PROMPT.format(skill=sandbox, video=args.video, work=paths["dir"].resolve(),
                                 config=args.config or "（無，使用預設）", lines=lines,
                                 max_vertical=limits.get("max_vertical", 8),
                                 max_horizontal=limits.get("max_horizontal", 5))
     # prompt goes in on stdin: --add-dir / --tools / --allowedTools take several values and would swallow it.
     # --tools removes every other tool (no writing, no web, no MCP); dontAsk denies anything not allowed.
-    # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside this folder and WORK.
+    # Read / Glob / Grep are left off --allowedTools on purpose: that keeps them inside the sandbox and WORK.
     cmd = [claude, "-p", "--permission-mode", "dontAsk", "--strict-mcp-config",
            "--add-dir", str(paths["dir"].resolve()),
            "--tools", "Read,Glob,Grep,Bash",
            "--allowedTools", "Bash(python scripts/frames.py:*)"]
     emit(log, "auto_select", "start")
     t0 = time.time()
-    with open(paths["dir"] / "logs" / "auto_select.log", "w", encoding="utf-8") as f:
-        rc = subprocess.run(cmd, cwd=SKILL_DIR, input=prompt, text=True, encoding="utf-8",
-                            stdout=f, stderr=subprocess.STDOUT).returncode
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "SHP_AUTO_WORKDIR": str(paths["dir"].resolve())}
+    try:
+        with open(paths["dir"] / "logs" / "auto_select.log", "w", encoding="utf-8") as f:
+            rc = subprocess.run(cmd, cwd=sandbox, input=prompt, text=True, encoding="utf-8", env=env,
+                                stdout=f, stderr=subprocess.STDOUT).returncode
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
     text = (paths["dir"] / "logs" / "auto_select.log").read_text(encoding="utf-8", errors="replace")
     err = {}
     warning = None
@@ -306,7 +338,7 @@ def main():
     ap.add_argument("--cookies-from-browser")
     ap.add_argument("--start")
     ap.add_argument("--end")
-    ap.add_argument("--model", default="large-v3-turbo", help="整場掃描用的轉錄模型")
+    ap.add_argument("--model", help="整場掃描用的轉錄模型（預設用 config 的 whisper.model）")
     ap.add_argument("--no-separate", action="store_true", help="不做人聲分離")
     ap.add_argument("--visual", action="store_true", help="也跑畫面分析（6 小時直播約 30 分鐘，預設權重 0）")
     ap.add_argument("--frames", type=int, default=20, help="候選截圖張數")
@@ -342,7 +374,7 @@ def main():
     rng = (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
 
     separate = not args.no_separate and has_separation()
-    tr = [PY, "transcribe.py", "--video", args.video, *base, *cfg, "--model", args.model, *rng]
+    tr = [PY, "transcribe.py", "--video", args.video, *base, *cfg, *(["--model", args.model] if args.model else []), *rng]
     if separate:
         tr.append("--separate")
     chat = None

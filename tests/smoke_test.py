@@ -107,10 +107,31 @@ def check(cond, label):
 
 
 def main():
+    # private terms (client names, local paths) must never reach the public repo; skipped without the list
+    r = subprocess.run([PY, str(HERE.parent / "tools" / "privacy_check.py")], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    print("  " + "\n  ".join(r.stdout.strip().splitlines()))
+    check(r.returncode == 0, "隱私檢查：被追蹤的檔案沒有私人詞")
+    sys.path.insert(0, str(HERE.parent / "tools"))
+    from privacy_check import scan
+    OUT.mkdir(exist_ok=True)
+    (OUT / "privacy.txt").write_text("第一行\n這裡有 Secret_Name 喔\n", encoding="utf-8")
+    check(scan([OUT / "privacy.txt"], ["secret_name"]) == [(OUT / "privacy.txt", 2, "secret_name")],
+          "隱私檢查：找得到私人詞（不分大小寫）和行號")
     print("建立測試素材...")
     video = make_fixture()
     sh("fetch_chat.py", "--file", OUT / "chat.live_chat.json", "--workdir", W)
     sh("audio_energy.py", "--video", video, "--workdir", W)
+    rows = (W / "audio_energy.csv").read_text(encoding="utf-8").splitlines()
+    check(len(rows) == 301 and rows[101].startswith("100,") and float(rows[101].split(",")[1]) > -35 > float(rows[51].split(",")[1]),
+          "音量：每秒一筆，大聲處較高")
+    broken = OUT / "broken.mp4"
+    broken.write_bytes(b"not a video")
+    WB = OUT / "broken_work"
+    r = subprocess.run([PY, "audio_energy.py", "--video", str(broken), "--workdir", str(WB)], cwd=SCRIPTS,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(r.returncode != 0 and not (WB / "audio_energy.csv").exists() and "讀不到音訊" in r.stderr,
+          "音量：ffmpeg 失敗時回報錯誤，不留下空的 CSV（pipeline 才不會當成完成）")
     sh("visual_events.py", "--video", video, "--workdir", W)
     sh("vocal_events.py", "--video", video, "--workdir", W)
     vis = np.genfromtxt(W / "visual_events.csv", delimiter=",", names=True)
@@ -290,6 +311,22 @@ def main():
           "版型校正：只改裁切，設定檔其他內容不動")
     check(merged["game"] == [400, 10, 1000, 1080] and merged["game_pip"]["pip"]["region"] == [5, 6, 100, 100]
           and "face" in merged, "版型校正：存檔後出片讀得到新範圍，其他裁切還在")
+    # settings file: concurrent writers don't lose projects, a broken file is kept aside
+    keep = studio.SETTINGS
+    studio.SETTINGS = OUT / "race_settings.json"
+    works = [str(OUT / f"race{i}") for i in range(8)]
+    threads = [threading.Thread(target=studio.remember, args=(w, None)) for w in works]
+    threads += [threading.Thread(target=studio.JOB.persist) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    check({r["work"] for r in studio.settings()["recent"]} == set(works) and "last_job" in studio.settings(),
+          "設定檔：同時寫入不會掉專案")
+    studio.SETTINGS.write_text('{"recent": [', encoding="utf-8")
+    check(studio.settings() == {"recent": []} and studio.SETTINGS.with_name("race_settings.json.bad").exists(),
+          "設定檔：壞掉的檔案改名保留，不會默默清空")
+    studio.SETTINGS = keep
     srv.shutdown()
 
     # headless picks: Claude's printed result is validated before anything is written
@@ -537,7 +574,7 @@ def main():
     from common import load_config
     zh = load_config()
     check(zh["language"] == "zh" and zh["chinese_convert"] == "s2twp" and "笑死" in zh["chat_keywords"]
-          and zh["whisper"]["model"] == "large-v3", "語言設定：預設是台灣中文，其他預設還在")
+          and zh["whisper"]["model"] == "large-v3-turbo", "語言設定：預設是台灣中文，其他預設還在（整場掃描用 turbo）")
     lang_cfg = OUT / "lang.json"
     lang_cfg.write_text(json.dumps({"language_profile": "en", "chat_keywords": {"gg": 1.0}}), encoding="utf-8")
     en = load_config(lang_cfg)
@@ -590,8 +627,56 @@ def main():
     check(mp4.stat().st_mtime == mtime and [c["id"] for c in man["clips"]] == ["v01", "h01"],
           "--srt-only 不重出影片，--only 不會弄丟其他片的 manifest")
 
+    # interrupted writes leave the old file, and a cut-off JSON doesn't count as a finished step
+    from common import atomic_write
+    from pipeline import Step
+    aw = OUT / "atomic.txt"
+    aw.write_text("舊內容", encoding="utf-8")
+    try:
+        with atomic_write(aw) as f:
+            f.write("寫到一半")
+            raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        pass
+    check(aw.read_text(encoding="utf-8") == "舊內容" and not list(OUT.glob("atomic.part*")),
+          "寫檔：中途中斷時保留原檔，也不留暫存檔")
+    cut = OUT / "cut" / "transcript.json"
+    cut.parent.mkdir()
+    cut.write_text('{"segments": [{"start": 1', encoding="utf-8")
+    (OUT / "cut" / "frames").mkdir()
+    (OUT / "cut" / "frames" / "00-01-00.part.jpg").write_bytes(b"x")
+    check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
+          "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
+
+    # clip ids become file names
+    from validate_selections import validate
+    from cut_clips import clip_stem
+    base_clip = {"format": "horizontal", "title": "同名", "segments": [[1, 2]]}
+    bad = validate([dict(base_clip, id=x) for x in ("a/b", "..\\x", "v01:")], {}, None)
+    check(sum("只能用英數字" in i["msg"] for i in bad) == 3, "選片檢查：id 有路徑或特殊字元是錯誤")
+    same = validate([dict(base_clip, id="v01"), dict(base_clip, id="v01", title="同 名")], {}, None)
+    check(any("同一個檔名" in i["msg"] for i in same) or any("重複" in i["msg"] for i in same), "選片檢查：檔名相同是錯誤")
+    clash = validate([dict(base_clip, id="v01", title="a b"), dict(base_clip, id="v01_a", title="b")], {}, None)
+    check(any("同一個檔名" in i["msg"] for i in clash), "選片檢查：不同 id 組出同一個檔名是錯誤")
+    check("/" not in clip_stem({"id": "../x", "title": "t"}) and "\\" not in clip_stem({"id": "a\\b", "title": "t"})
+          and not clip_stem({"id": "..", "title": "t"}).startswith("."), "出片：檔名裡的 id 也會清掉路徑字元")
+
+    # --auto-select runs in a sandbox with only what it needs, and frames.py stays in its project
+    from pipeline import make_sandbox
+    (OUT / "sandbox").mkdir()
+    box = make_sandbox(OUT / "sandbox")
+    names = {str(p.relative_to(box)).replace("\\", "/") for p in box.rglob("*")}
+    check({"SKILL.md", "scripts/frames.py", "scripts/common.py", "references/selection_guide.md"} <= names
+          and not any(n.startswith(("_eval", "tests", "tools", "app", ".git")) for n in names),
+          "無人挑選：暫存資料夾只有需要的檔案，讀不到評估資料和測試輸出")
+    r = subprocess.run([PY, "frames.py", "--video", str(video), "--workdir", str(OUT / "elsewhere"), "--times", "10"],
+                       cwd=SCRIPTS, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env={**__import__("os").environ, "SHP_AUTO_WORKDIR": str(W)})
+    check(r.returncode != 0 and not (OUT / "elsewhere").exists(), "無人挑選：frames.py 不能寫到別的資料夾")
+
     # cutting pauses inside segments
     from tighten import pauses, tighten_clip
+    from common import parse_ts as parse_ts_for, work_paths as work_paths_for
     from validate_selections import cuts_speech
     ws = [{"start": 10.0, "end": 11.0, "word": "a"}, {"start": 13.0, "end": 14.0, "word": "b"},
           {"start": 14.2, "end": 15.0, "word": "c"}, {"start": 18.0, "end": 19.0, "word": "d"}]
@@ -600,6 +685,35 @@ def main():
     energy = {t: -30.0 for t in range(0, 30)}
     energy[16] = -20.0
     check((15.2, 17.8) not in pauses(9, 20, ws, 0.8, 0.2, energy, 3), "剪掉停頓：停頓裡比說話大聲（笑聲）就保留")
+    # a laugh inside a short pause has no whole second of its own, but must still keep the pause
+    short = [{"start": 9.0, "end": 10.2, "word": "a"}, {"start": 12.0, "end": 12.5, "word": "b"}]
+    e2 = {t: -30.0 for t in range(0, 30)}
+    e2[10] = e2[11] = -12.0
+    check(pauses(9, 12.5, short, 0.8, 0.2, e2, 3) == [], "剪掉停頓：2 秒內的笑聲也會保留（每秒音量）")
+
+    # 50 ms loudness from vocals16k.wav: drawn-out endings stay, a loud laugh keeps its pause
+    import wave
+    from tighten import audio_reader
+    WF = OUT / "fine"
+    WF.mkdir()
+    sr = 16000
+    tt = np.arange(int(sr * 7.0)) / sr
+    amp = np.full(tt.shape, 0.001)
+    for a_, b_, v in ((0.5, 1.0, 0.3), (1.0, 1.5, 0.1), (3.0, 3.5, 0.3), (4.2, 5.0, 0.8), (6.0, 6.5, 0.3)):
+        amp[(tt >= a_) & (tt < b_)] = v  # words, a breathy tail after the first, a laugh in the second pause
+    with wave.open(str(WF / "vocals16k.wav"), "wb") as wv:
+        wv.setnchannels(1)
+        wv.setsampwidth(2)
+        wv.setframerate(sr)
+        wv.writeframes((np.sin(2 * np.pi * 300 * tt) * amp * 32767).astype(np.int16).tobytes())
+    fw = [{"start": 0.5, "end": 1.0, "word": "x"}, {"start": 3.0, "end": 3.5, "word": "y"}, {"start": 6.0, "end": 6.5, "word": "z"}]
+    read = audio_reader(work_paths_for(WF))
+    fsegs, _, fremoved = tighten_clip({"id": "f", "format": "horizontal", "segments": [[0.5, 6.5]]},
+                                      [{"start": 0.5, "end": 6.5, "text": "xyz", "words": fw}], {}, {}, read)
+    first_out = parse_ts_for(fsegs[0][1])
+    check(len(fsegs) == 2 and 1.6 <= first_out <= 1.8 and parse_ts_for(fsegs[1][0]) <= 2.9 and parse_ts_for(fsegs[1][1]) >= 6.4,
+          f"剪掉停頓：細時間音量保留拉長的字尾，停頓裡有笑聲就不剪（{fsegs}）")
+
     tc = {"id": "v", "format": "vertical", "segments": [{"in": 9, "out": 20, "crop": "face"}],
           "notes": [{"at": 12, "text": "被剪掉的時間"}, {"at": 13.5, "text": "原本就在"}]}
     tsg = [{"start": 10.0, "end": 19.0, "text": "abcd", "words": ws}]

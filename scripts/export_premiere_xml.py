@@ -21,7 +21,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from common import (SKILL_DIR, find_config, load_config, load_json, normalize_segments, parse_ts, probe,
+from common import (SKILL_DIR, atomic_write, find_config, load_config, load_json, normalize_segments, parse_ts, probe,
                     source_to_clip_time, work_paths)
 from cut_clips import clamp_crop, resolve_template
 
@@ -443,7 +443,7 @@ def main():
     out = Path(args.out) if args.out else paths["dir"] / f"{bmp_only(src.stem)}_premiere.xml"
     ET.indent(root)
     xml = ET.tostring(root, encoding="unicode")
-    with open(out, "w", encoding="utf-8") as f:
+    with atomic_write(out) as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n' + xml + "\n")
     print(f"已建立 {len(made)} 個序列 → {out}")
     if skipped:

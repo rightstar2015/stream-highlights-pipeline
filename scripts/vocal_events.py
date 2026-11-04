@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from common import fmt_ts, load_json, need_tool, parse_ts, work_paths
+from common import atomic_write, fmt_ts, load_json, need_tool, parse_ts, work_paths
 
 SR = 16000
 SUB = 320            # 20 ms sub-frames -> 50 per second
@@ -130,7 +130,7 @@ def main():
         laugh[t] = laugh_score(env, active)
 
     first = int(round(rel_start + off))
-    with open(paths["vocal"], "w", encoding="utf-8") as f:
+    with atomic_write(paths["vocal"]) as f:
         f.write("t,vocal_rel_db,scream,laugh\n")
         for i in range(n):
             f.write(f"{first + i},{rel[i]:.1f},{scream[i]:.2f},{laugh[i]:.3f}\n")

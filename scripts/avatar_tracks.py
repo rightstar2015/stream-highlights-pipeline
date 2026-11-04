@@ -36,7 +36,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from common import find_config, load_config
+from common import atomic_write, find_config, load_config
 from export_premiere_xml import bmp_only, path_url, rate_el, sub
 
 ANCHOR_NAME = "對齊用_貼上後刪除"
@@ -329,7 +329,7 @@ def main():
 
     out = Path(args.out) if args.out else xml_path.with_name(bmp_only(xml_path.stem) + "_頭像.xml")
     ET.indent(root)
-    with open(out, "w", encoding="utf-8") as fh:
+    with atomic_write(out) as fh:
         fh.write('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n'
                  + ET.tostring(root, encoding="unicode") + "\n")
     print(f"→ {out}")

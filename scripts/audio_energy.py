@@ -5,10 +5,12 @@ Streams decoded audio through ffmpeg so memory stays small even for 6h streams.
 """
 import argparse
 import subprocess
+import sys
+import tempfile
 
 import numpy as np
 
-from common import need_tool, parse_ts, work_paths
+from common import atomic_write, need_tool, parse_ts, work_paths
 
 SR = 8000  # loudness only; low rate keeps it fast
 
@@ -31,22 +33,30 @@ def main():
     if args.end:
         cmd += ["-t", f"{parse_ts(args.end) - start:.3f}"]
     cmd += ["-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-    chunk = SR * 2  # bytes per second (int16)
-    rows, t, buf = [], start, b""
-    while True:
-        data = proc.stdout.read(chunk * 60)
-        if not data:
-            break
-        buf += data
-        while len(buf) >= chunk:
-            sec, buf = buf[:chunk], buf[chunk:]
-            x = np.frombuffer(sec, dtype=np.int16).astype(np.float32) / 32768.0
-            rms = float(np.sqrt(np.mean(x * x)) + 1e-9)
-            rows.append((t, 20 * np.log10(rms)))
-            t += 1
-    proc.wait()
-    with open(paths["audio"], "w", encoding="utf-8") as f:
+    # stderr goes to a file: a pipe left unread could fill up and stall ffmpeg
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        chunk = SR * 2  # bytes per second (int16)
+        rows, t, buf = [], start, b""
+        while True:
+            data = proc.stdout.read(chunk * 60)
+            if not data:
+                break
+            buf += data
+            n = len(buf) // chunk  # whole seconds at once, so the buffer is copied once per read
+            if n:
+                x = np.frombuffer(buf[:n * chunk], dtype=np.int16).astype(np.float32).reshape(n, SR) / 32768.0
+                rms = np.sqrt(np.mean(x * x, axis=1)) + 1e-9
+                rows += zip(range(t, t + n), (20 * np.log10(rms)).tolist())
+                t += n
+                buf = buf[n * chunk:]
+        rc = proc.wait()
+        err.seek(0)
+        tail = err.read().decode("utf-8", "replace").strip().splitlines()[-5:]
+    if rc != 0 or not rows:
+        # write nothing: an empty CSV would look finished to pipeline.py and be skipped forever
+        sys.exit(f"[錯誤] 讀不到音訊（ffmpeg 回傳 {rc}）：" + " / ".join(tail))
+    with atomic_write(paths["audio"]) as f:
         f.write("t,rms_db\n")
         for t, db in rows:
             f.write(f"{t},{db:.2f}\n")

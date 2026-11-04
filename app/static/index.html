@@ -34,6 +34,7 @@ section { display: none; } section.on { display: block; }
 .grid { display: grid; grid-template-columns: 140px 1fr; gap: 10px 14px; align-items: center; }
 @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 label { color: var(--muted); }
+input[type=text]:invalid { border-color: var(--bad); }
 input[type=text], select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg); color: var(--ink); font: inherit; }
 textarea { font-family: Consolas, "Microsoft JhengHei", monospace; font-size: 13px; resize: vertical; }
@@ -398,7 +399,8 @@ function renderReview() {
     <div class="clip" data-i="${i}">
       <div><input type="checkbox" data-k="on" ${c.on ? "checked" : ""}></div>
       <div class="fields">
-        <input type="text" data-k="id" value="${esc(c.id)}">
+        <input type="text" data-k="id" value="${esc(c.id)}" pattern="[A-Za-z0-9_\-]{1,32}" required
+               title="英數字、底線、連字號，最多 32 字，例如 v01">
         <select data-k="format"><option value="vertical" ${c.format === "vertical" ? "selected" : ""}>直式 Shorts</option>
           <option value="horizontal" ${c.format === "horizontal" ? "selected" : ""}>橫式精華</option></select>
         <input type="text" data-k="title" value="${esc(c.title)}" placeholder="標題">

@@ -27,11 +27,11 @@ APP = Path(__file__).resolve().parent
 SKILL = APP.parent
 SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from common import (default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
+from common import (atomic_output, default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
                     parse_ts, probe, save_json, work_paths)
-from cut_clips import resolve_template, safe_name, vertical_filter  # noqa: E402
+from cut_clips import clip_stem, resolve_template, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
-from tighten import load_energy, tighten_clip  # noqa: E402
+from tighten import audio_reader, load_energy, tighten_clip  # noqa: E402
 from validate_selections import snap_clip, validate  # noqa: E402
 
 PY = sys.executable
@@ -41,18 +41,39 @@ REVIEW_STATE = "review_state.json"  # every clip on the review page, checked or 
 PROJECT_MARKERS = ("candidates.json", "studio.json", "selections.json")
 
 
+SETTINGS_LOCK = threading.RLock()  # request threads and the job thread all read-modify-write the file
+
+
 def settings():
-    try:
-        return load_json(SETTINGS)
-    except Exception:
-        return {"recent": []}
+    with SETTINGS_LOCK:
+        if not SETTINGS.exists():
+            return {"recent": []}
+        try:
+            return load_json(SETTINGS)
+        except (ValueError, OSError) as e:
+            # keep the broken file for the user instead of quietly overwriting it with an empty list
+            bad = SETTINGS.with_name(SETTINGS.name + ".bad")
+            try:
+                os.replace(SETTINGS, bad)
+            except OSError:
+                pass
+            print(f"[提示] 讀不到 {SETTINGS}（{e}），已改名成 {bad.name}；最近的專案清單從空的開始")
+            return {"recent": []}
+
+
+def update_settings(change):
+    """Read, change and save the settings file as one step."""
+    with SETTINGS_LOCK:
+        s = settings()
+        change(s)
+        save_json(s, SETTINGS)
 
 
 def remember(work, video):
-    s = settings()
-    rec = [r for r in s.get("recent", []) if r["work"] != work]
-    s["recent"] = [{"work": work, "video": video}] + rec[:9]
-    save_json(s, SETTINGS)
+    def change(s):
+        rec = [r for r in s.get("recent", []) if r["work"] != work]
+        s["recent"] = [{"work": work, "video": video}] + rec[:9]
+    update_settings(change)
 
 
 # ---------------------------------------------------------------- background job
@@ -71,9 +92,8 @@ class Job:
 
     def persist(self):
         """Keep the last job in the settings file, so a restart can report one that never finished."""
-        s = settings()
-        s["last_job"] = self.snapshot()
-        save_json(s, SETTINGS)
+        snap = self.snapshot()
+        update_settings(lambda s: s.__setitem__("last_job", snap))
 
     def restore(self):
         last = settings().get("last_job")
@@ -195,7 +215,7 @@ def project_state(work):
     if paths["clips"].exists():
         out["clips"] = sorted(str(p) for p in paths["clips"].iterdir() if p.suffix in (".mp4", ".srt"))
     out["xml"] = [str(p) for p in paths["dir"].glob("*_premiere.xml")]
-    wanted = {Path(f"{c['id']}_{safe_name(c.get('title'))}.mp4").stem for c in (out["selections"] or {}).get("clips", [])}
+    wanted = {clip_stem(c) for c in (out["selections"] or {}).get("clips", [])}
     out["stale_clips"] = [Path(f).name for f in out["clips"] if out["selections"] and Path(f).stem not in wanted]
     return out
 
@@ -241,8 +261,9 @@ def make_preview(work, video, ranges):
         fl = "".join(f"[{i}:v]scale=-2:480,setsar=1[v{i}];" for i in range(n))
         fl += "".join(f"[v{i}][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
         cmd += ["-filter_complex", fl, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast",
-                "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out)]
-        subprocess.run(cmd, check=True, capture_output=True)
+                "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]
+        with atomic_output(out) as tmp:  # an interrupted render must not become the cached preview
+            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
     return str(out)
 
 
@@ -494,7 +515,8 @@ class Handler(BaseHTTPRequestHandler):
         paths = work_paths(d["work"])
         meta = studio_meta(paths)
         segs, notes, removed = tighten_clip(d["clip"], transcript_for(paths), load_energy(paths["audio"]),
-                                            load_config(meta.get("config")))
+                                            load_config(meta.get("config")),
+                                            audio_reader(paths, project_source(paths, meta)))
         self.send_json({"segments": segs, "notes": notes, "removed": round(removed, 1)})
 
     def stop(self, d):
@@ -530,8 +552,9 @@ class Handler(BaseHTTPRequestHandler):
         at = min(max(0.0, parse_ts(d["at"])), max(0.0, info["duration"] - 1))
         out = paths["dir"] / "previews" / "crop_frame.jpg"
         out.parent.mkdir(exist_ok=True)
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
-                        "-q:v", "3", str(out)], check=True, capture_output=True)
+        with atomic_output(out) as tmp:
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
+                            "-q:v", "3", str(tmp)], check=True, capture_output=True)
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_preview(self, d):
@@ -547,8 +570,9 @@ class Handler(BaseHTTPRequestHandler):
         if tpl:
             cmd += ["-loop", "1", "-i", str(tpl)]
         cmd += ["-filter_complex", vertical_filter(lay, info["width"], info["height"], crop, bool(tpl)),
-                "-map", "[out]", "-frames:v", "1", "-q:v", "3", str(out)]
-        subprocess.run(cmd, check=True, capture_output=True)
+                "-map", "[out]", "-frames:v", "1", "-q:v", "3"]
+        with atomic_output(out) as tmp:
+            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_save(self, d):

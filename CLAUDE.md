@@ -40,6 +40,7 @@ scripts/
   diarize.py                    選用：pyannote 說話者辨識 → speakers.json 與帶標籤的 SRT（草稿）
   setup_check.py                環境檢查
 tools/eval_selections.py        拿人工選片評估推薦或候選：每支涵蓋率、精準度、最佳名次
+tools/privacy_check.py          用不進 git 的 references/private_terms.txt 掃描被追蹤的檔案；smoke test 一開始就跑
 app/server.py                   Clip Review：本機網頁介面（只用標準函式庫，綁 127.0.0.1）
 app/static/index.html           單頁前端（分析／審核／出片／版型校正）
 start_clip_review.bat／.sh      啟動 Clip Review
@@ -55,7 +56,9 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 安全規則：
 - Clip Review 的每個請求都要通過 `check_request`（Host、Origin、Sec-Fetch-Site），POST 必須是 JSON，專案相關 API 只接受已開啟的專案。新增 API 時要照做。
-- 聊天室、逐字稿、畫面文字都是不可信資料。`--auto-select` 的 Claude 沒有寫檔、網路和 MCP 工具，也只能讀專案和工作資料夾（Read 等工具刻意不列進 `--allowedTools`），結果由 `parse_auto_output` 檢查後存檔。不要把這些權限加回去。
+- 聊天室、逐字稿、畫面文字都是不可信資料。`--auto-select` 的 Claude 沒有寫檔、網路和 MCP 工具，也只能讀暫存資料夾和工作資料夾（Read 等工具刻意不列進 `--allowedTools`），結果由 `parse_auto_output` 檢查後存檔。不要把這些權限加回去。
+- `--auto-select` 在 `make_sandbox` 建的暫存資料夾執行（只有 SKILL.md、scripts、references 的 .md、語言設定），讀不到 Skill 資料夾裡的 `_eval/`、`tests/_out/`。`SHP_AUTO_WORKDIR` 讓 frames.py 只能寫入該專案。
+- 輸出檔一律用 `common.atomic_write`／`atomic_output` 先寫暫存檔再改名；pipeline 用「檔案存在」判斷步驟完成，半截的檔案會被當成已完成。
 
 ## 開發規則
 
@@ -88,7 +91,8 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
-- `tighten.py`：s04（直式、3 段）從 38.5 秒剪到 31.8 秒。使用者看過：拉長的字尾、氣音常被剪掉，因為 Whisper 的字時間只涵蓋字的開頭；可以接受，後製再補。要改善可改用 vocals16k.wav 的細時間音量判斷停頓。
+- `tighten.py`：第一版只看逐字稿，s04（直式、3 段）從 38.5 秒剪到 31.8 秒，使用者看過：拉長的字尾、氣音常被剪掉，因為 Whisper 的字時間只涵蓋字的開頭。改用 vocals16k.wav 的 50 ms 音量後，同一支剪到 34.0 秒；同一場其他 5 支剪掉 0–3.7 秒。新版還沒有人聽過。
+- `--auto-select` 的暫存資料夾：實際用 `claude -p` 確認讀得到 SKILL.md、frames.py 能寫入 WORK，Glob `_eval/` 被拒絕。完整挑選沒有重跑。
 - `fetch_chat.py --url`：6 小時多的存檔約 6 秒，491 則留言和最後一則的時間都與之前下載的檔案相同。沒有 JavaScript 執行環境時 yt-dlp 會警告缺少影片格式，不影響聊天室。
 
 尚未在真實環境驗證：macOS／Linux（只有 CI 的 smoke test，用真實直播沒跑過）；`languages/en.json`；`suggest_terms.py`（還沒有真實校正稿）；`export_premiere_xml.py` 的 `premiere.cards`（只有 smoke test 檢查 XML 內容，還沒匯入 Premiere）。
