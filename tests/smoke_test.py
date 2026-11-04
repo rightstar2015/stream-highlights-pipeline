@@ -674,6 +674,18 @@ def main():
     check(not Step("transcribe", [], cut).done() and not Step("frames", [], OUT / "cut" / "frames").done(),
           "pipeline：截斷的 JSON 和只有暫存檔的截圖資料夾都不算完成")
 
+    # more checks before rendering
+    lay_cfg = {"vertical_layout": {"default_crop": "missing", "crop_presets": {"game": [0, 0, 10, 10]}}}
+    msgs = [i["msg"] for i in validate([{"id": "v1", "format": "vertical", "segments": [[1, 5]]}], lay_cfg, None)]
+    check(any("預設的「missing」" in m for m in msgs), "選片檢查：沒寫裁切時，預設裁切不存在是錯誤")
+    msgs = [(i["level"], i["msg"]) for i in validate([{"id": "h1", "format": "horizontal", "segments": [
+        {"in": 1, "out": 5, "crop": "game"}], "notes": [{"at": 3, "text": "在裡面"}, {"at": 9, "text": "剪掉了"},
+                                                       {"text": "沒有時間"}]}], {}, None)]
+    check(("warning", "橫式片段的裁切不會用到（只有直式會裁切）") in msgs
+          and any(lv == "warning" and "剪掉了" in m for lv, m in msgs) and not any("在裡面" in m for _, m in msgs)
+          and any(lv == "error" and "格式不正確" in m for lv, m in msgs),
+          f"選片檢查：橫式寫裁切、剪輯指示在片段外是提醒，指示格式不對是錯誤（{msgs}）")
+
     # variable frame rate
     from common import probe as probe_info, vfr_warning
     check(vfr_warning(probe_info(video)) is None and "可變幀率" in vfr_warning({"fps": 60.0, "avg_fps": 58.9})
