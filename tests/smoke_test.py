@@ -122,6 +122,16 @@ def main():
     video = make_fixture()
     sh("fetch_chat.py", "--file", OUT / "chat.live_chat.json", "--workdir", W)
     sh("audio_energy.py", "--video", video, "--workdir", W)
+    rows = (W / "audio_energy.csv").read_text(encoding="utf-8").splitlines()
+    check(len(rows) == 301 and rows[101].startswith("100,") and float(rows[101].split(",")[1]) > -35 > float(rows[51].split(",")[1]),
+          "音量：每秒一筆，大聲處較高")
+    broken = OUT / "broken.mp4"
+    broken.write_bytes(b"not a video")
+    WB = OUT / "broken_work"
+    r = subprocess.run([PY, "audio_energy.py", "--video", str(broken), "--workdir", str(WB)], cwd=SCRIPTS,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(r.returncode != 0 and not (WB / "audio_energy.csv").exists() and "讀不到音訊" in r.stderr,
+          "音量：ffmpeg 失敗時回報錯誤，不留下空的 CSV（pipeline 才不會當成完成）")
     sh("visual_events.py", "--video", video, "--workdir", W)
     sh("vocal_events.py", "--video", video, "--workdir", W)
     vis = np.genfromtxt(W / "visual_events.csv", delimiter=",", names=True)
