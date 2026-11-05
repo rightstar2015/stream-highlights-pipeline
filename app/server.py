@@ -610,8 +610,7 @@ class Handler(BaseHTTPRequestHandler):
         out = paths["dir"] / "previews" / "crop_frame.jpg"
         out.parent.mkdir(exist_ok=True)
         with atomic_output(out) as tmp:
-            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
-                            "-q:v", "3", str(tmp)], check=True, capture_output=True)
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1", "-q:v", "3", str(tmp)])
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_preview(self, d):
@@ -629,7 +628,7 @@ class Handler(BaseHTTPRequestHandler):
         cmd += ["-filter_complex", vertical_filter(lay, info["width"], info["height"], crop, bool(tpl)),
                 "-map", "[out]", "-frames:v", "1", "-q:v", "3"]
         with atomic_output(out) as tmp:
-            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
+            run(cmd + [str(tmp)])
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_save(self, d):

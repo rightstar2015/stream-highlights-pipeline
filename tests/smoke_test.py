@@ -290,6 +290,12 @@ def main():
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6",
                     "-c:v", "libx264", "-preset", "ultrafast", str(silent)], check=True)
     check(Path(studio.make_preview(str(W4), str(silent), [(1, 2), (3, 4)])).exists(), "預覽：沒有音軌的直播也能預覽")
+    try:
+        studio.make_preview(str(W4), str(OUT / "broken.mp4"), [(0, 1)])
+        err = ""
+    except RuntimeError as e:
+        err = str(e)
+    check("指令失敗" in err and len(err.splitlines()) > 1, f"預覽：失敗時回報 ffmpeg 的錯誤內容（{err[:80]}）")
     pdir = W4 / "previews"
     for i in range(studio.PREVIEW_KEEP + 5):
         (pdir / f"old{i:02d}.mp4").write_bytes(b"x")
