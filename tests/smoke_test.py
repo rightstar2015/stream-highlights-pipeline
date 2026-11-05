@@ -202,6 +202,13 @@ def main():
     r = urllib.request.urlopen(req)
     check(r.status == 206 and r.read() == jpg.read_bytes()[10:20], "Clip Review：檔案支援 Range（影片可拖曳）")
     try:
+        urllib.request.urlopen(urllib.request.Request(f"{base}/file?path={quote(str(jpg))}",
+                                                      headers={"Range": f"bytes={jpg.stat().st_size}-"}))
+        code = 206
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check(code == 416, "Clip Review：Range 超出檔案時回 416")
+    try:
         urllib.request.urlopen(f"{base}/file?path={quote(str(video))}")
         blocked = False
     except urllib.error.HTTPError as e:
@@ -285,6 +292,26 @@ def main():
     pv_file = OUT / "pv.mp4"
     pv_file.write_bytes(pv)
     check(abs(probe(pv_file)[2] - 3) < 0.5, "API 預覽：兩段接起來約 3 秒")
+    check(status("/api/preview", {"work": str(W4), "ranges": [[0, 16 * 60]]}) == 400, "API 預覽：超過 15 分鐘會擋下")
+    silent = OUT / "silent.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6",
+                    "-c:v", "libx264", "-preset", "ultrafast", str(silent)], check=True)
+    check(Path(studio.make_preview(str(W4), str(silent), [(1, 2), (3, 4)])).exists(), "預覽：沒有音軌的直播也能預覽")
+    try:
+        studio.make_preview(str(W4), str(OUT / "broken.mp4"), [(0, 1)])
+        err = ""
+    except RuntimeError as e:
+        err = str(e)
+    check("指令失敗" in err and len(err.splitlines()) > 1, f"預覽：失敗時回報 ffmpeg 的錯誤內容（{err[:80]}）")
+    pdir = W4 / "previews"
+    for i in range(studio.PREVIEW_KEEP + 5):
+        (pdir / f"old{i:02d}.mp4").write_bytes(b"x")
+        __import__("os").utime(pdir / f"old{i:02d}.mp4", (1000 + i, 1000 + i))
+    studio.prune_previews(pdir)
+    left = list(pdir.glob("*.mp4"))
+    check(len(left) == studio.PREVIEW_KEEP and not (pdir / "old00.mp4").exists(), "預覽：只保留最近用過的 50 個")
+    check(post("/api/clear_previews", {"work": str(W4)})["removed"] == studio.PREVIEW_KEEP and not list(pdir.glob("*.mp4")),
+          "預覽：可以一鍵清除")
     clip = {"id": "v09", "format": "vertical", "title": "API測試", "segments": [{"in": 100, "out": 108, "crop": "game"}]}
     check(status("/api/render", {"work": str(W4), "selections": {"clips": []}}) == 400, "API 出片：沒勾選會擋下")
     check(status("/api/render", {"work": str(W4), "selections": {"clips": [

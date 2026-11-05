@@ -28,7 +28,7 @@ SKILL = APP.parent
 SCRIPTS = SKILL / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from common import (atomic_output, default_workdir, find_config, fmt_ts, load_best_transcript, load_config, load_json,  # noqa: E402
-                    parse_ts, probe, save_json, work_paths)
+                    parse_ts, probe, run, save_json, work_paths)
 from cut_clips import clip_stem, resolve_template, vertical_filter  # noqa: E402
 from learn_feedback import record as record_feedback  # noqa: E402
 from tighten import audio_reader, load_energy, tighten_clip  # noqa: E402
@@ -111,7 +111,10 @@ class Job:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
         else:
-            os.killpg(pid, signal.SIGKILL)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:  # it just finished by itself
+                pass
         return True
 
     def start(self, kind, work, cmds):
@@ -252,24 +255,60 @@ def project_source(paths, meta):
     return meta.get("video") or previous
 
 
+PREVIEW_MAX_SEC = 15 * 60  # one preview; longer clips are better checked in the render
+PREVIEW_KEEP = 50  # previews kept per project, newest first...
+PREVIEW_MAX_BYTES = 2 << 30  # ...and at most this much disk
+PREVIEW_LOCKS, PREVIEW_LOCKS_GUARD = {}, threading.Lock()
+
+
+def preview_lock(path):
+    """One lock per preview file, so two identical requests render it once instead of racing."""
+    with PREVIEW_LOCKS_GUARD:
+        return PREVIEW_LOCKS.setdefault(str(path), threading.Lock())
+
+
+def prune_previews(d, keep=None):
+    """Drop the least recently used previews beyond PREVIEW_KEEP files or PREVIEW_MAX_BYTES."""
+    files = sorted((f for f in Path(d).glob("*.mp4") if ".part." not in f.name),
+                   key=lambda f: f.stat().st_mtime, reverse=True)
+    total = 0
+    for i, f in enumerate(files):
+        total += f.stat().st_size
+        if f != keep and (i >= PREVIEW_KEEP or total > PREVIEW_MAX_BYTES):
+            try:
+                f.unlink()
+            except OSError:  # open in the browser right now; it goes next time
+                pass
+
+
 def make_preview(work, video, ranges):
     """Low-res proxy of the clip's segments joined in order (jump cuts), so the browser never
     has to read the multi-hour source."""
+    total = sum(b - a for a, b in ranges)
+    if total > PREVIEW_MAX_SEC:
+        raise ValueError(f"預覽最長 {PREVIEW_MAX_SEC // 60} 分鐘（這支 {total / 60:.1f} 分鐘），請直接出片檢查")
     paths = work_paths(work)
     d = paths["dir"] / "previews"
     d.mkdir(exist_ok=True)
     out = d / ("_".join(f"{a:.1f}-{b:.1f}" for a, b in ranges)[:150] + ".mp4")
-    if not out.exists():
-        cmd = ["ffmpeg", "-y", "-v", "error"]
-        for a, b in ranges:  # one seeked input per segment keeps each seek fast
-            cmd += ["-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", video]
-        n = len(ranges)
-        fl = "".join(f"[{i}:v]scale=-2:480,setsar=1[v{i}];" for i in range(n))
-        fl += "".join(f"[v{i}][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
-        cmd += ["-filter_complex", fl, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast",
-                "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]
-        with atomic_output(out) as tmp:  # an interrupted render must not become the cached preview
-            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
+    with preview_lock(out):
+        if out.exists():
+            os.utime(out)  # recently used: keep it when pruning
+        else:
+            audio = "audio_channels" in probe(video)
+            cmd = ["ffmpeg", "-y", "-v", "error"]
+            for a, b in ranges:  # one seeked input per segment keeps each seek fast
+                cmd += ["-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", video]
+            n = len(ranges)
+            fl = "".join(f"[{i}:v]scale=-2:480,setsar=1[v{i}];" for i in range(n))
+            fl += "".join(f"[v{i}]" + (f"[{i}:a]" if audio else "") for i in range(n))
+            fl += f"concat=n={n}:v=1:a={int(audio)}[v]" + ("[a]" if audio else "")
+            cmd += ["-filter_complex", fl, "-map", "[v]", *(["-map", "[a]"] if audio else []),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-c:a", "aac", "-b:a", "96k",
+                    "-movflags", "+faststart"]
+            with atomic_output(out) as tmp:  # an interrupted render must not become the cached preview
+                run(cmd + [str(tmp)])
+    prune_previews(d, keep=out)
     return str(out)
 
 
@@ -420,12 +459,13 @@ class Handler(BaseHTTPRequestHandler):
                        "/api/preview": self.preview, "/api/pick": self.pick,
                        "/api/open": self.open_path, "/api/review_state": self.review_state,
                        "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop,
-                       "/api/tighten": self.tighten,
+                       "/api/tighten": self.tighten, "/api/clear_previews": self.clear_previews,
                        "/api/crop_state": self.crop_state, "/api/crop_frame": self.crop_frame,
                        "/api/crop_preview": self.crop_preview, "/api/crop_save": self.crop_save}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
-            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap", "/api/tighten")
+            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap", "/api/tighten",
+                            "/api/clear_previews")
                  or u.path.startswith("/api/crop_")) and not known_project(data.get("work", ""))):
                 return self.send_json({"error": "不是已開啟的專案"}, 403)
             return handler(data)
@@ -502,7 +542,10 @@ class Handler(BaseHTTPRequestHandler):
         ranges = [(float(a), float(b)) for a, b in d["ranges"] if float(b) > float(a)]
         if not ranges:
             return self.send_json({"error": "進出點不正確"}, 400)
-        out = make_preview(d["work"], meta["video"], ranges)
+        try:
+            out = make_preview(d["work"], meta["video"], ranges)
+        except ValueError as e:
+            return self.send_json({"error": str(e)}, 400)
         self.send_json({"url": "/file?path=" + quote(out)})
 
     def validate(self, d):
@@ -527,6 +570,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def stop(self, d):
         self.send_json({"ok": JOB.stop()})
+
+    def clear_previews(self, d):
+        files = list((work_paths(d["work"])["dir"] / "previews").glob("*.mp4"))
+        removed = 0
+        for f in files:
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+        self.send_json({"removed": removed})
 
     def review_state(self, d):
         if not isinstance(d.get("clips"), list):
@@ -559,8 +613,7 @@ class Handler(BaseHTTPRequestHandler):
         out = paths["dir"] / "previews" / "crop_frame.jpg"
         out.parent.mkdir(exist_ok=True)
         with atomic_output(out) as tmp:
-            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1",
-                            "-q:v", "3", str(tmp)], check=True, capture_output=True)
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", src, "-frames:v", "1", "-q:v", "3", str(tmp)])
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_preview(self, d):
@@ -578,7 +631,7 @@ class Handler(BaseHTTPRequestHandler):
         cmd += ["-filter_complex", vertical_filter(lay, info["width"], info["height"], crop, bool(tpl)),
                 "-map", "[out]", "-frames:v", "1", "-q:v", "3"]
         with atomic_output(out) as tmp:
-            subprocess.run(cmd + [str(tmp)], check=True, capture_output=True)
+            run(cmd + [str(tmp)])
         self.send_json({"url": "/file?path=" + quote(str(out))})
 
     def crop_save(self, d):
@@ -610,6 +663,12 @@ class Handler(BaseHTTPRequestHandler):
         rng = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
         a, b = 0, size - 1
         if rng and (rng.group(1) or rng.group(2)):  # video seeking needs Range support
+            if (rng.group(1) and int(rng.group(1)) >= size) or (not rng.group(1) and int(rng.group(2)) == 0):
+                self.send_response(416)  # starts past the end: nothing to send
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if rng.group(1):
                 a = int(rng.group(1))
                 b = int(rng.group(2)) if rng.group(2) else size - 1

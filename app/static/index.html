@@ -179,7 +179,7 @@ const $ = s => document.querySelector(s);
 const STEP_NAMES = {pipeline: "整體", check: "檢查輸入", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
   visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
 const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
-let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null;
+let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null, pollFails = 0;
 
 // ------------------------------------------------------------- keep review edits
 function touch() {
@@ -299,7 +299,16 @@ function renderSteps(ul, events) {
 
 async function poll() {
   clearTimeout(pollTimer);
-  const j = await api("/api/job");
+  let j;
+  try { j = await api("/api/job"); }
+  catch (e) {  // server restarting or busy: keep trying instead of freezing on "分析中…"
+    const wait = [2, 5, 10][Math.min(pollFails++, 2)];
+    for (const id of ["#jobTitle", "#outTitle"])
+      if (!$(id).closest(".card").hidden) $(id).textContent = `伺服器沒有回應，${wait} 秒後重試…`;
+    pollTimer = setTimeout(poll, wait * 1000);
+    return;
+  }
+  pollFails = 0;
   if (!j.kind) return;
   const analyze = j.kind === "analyze";
   const card = analyze ? $("#jobCard") : $("#outJob");
@@ -518,11 +527,16 @@ function renderOutputs() {
   const box = $("#outFiles");
   if (!files.length) { box.innerHTML = `<div class="empty">還沒有成品。</div>`; return; }
   box.innerHTML = `<div class="row" style="justify-content:space-between"><strong>成品</strong>
-      <button class="btn" id="openFolder">開啟資料夾</button></div>
+      <span class="row"><button class="btn" id="clearPreviews">清除預覽</button>
+      <button class="btn" id="openFolder">開啟資料夾</button></span></div>
     <ul class="files">${files.map(f => `<li><a href="${fileUrl(f)}" target="_blank">${esc(f.split(/[\\/]/).pop())}</a></li>`).join("")}</ul>
     <p class="muted">Premiere：檔案 &gt; 匯入 XML；字幕 .srt 拖到序列成為字幕軌。</p>
     ${project.stale_clips.length ? `<p class="muted" style="color:var(--warn)">這些檔案已不在目前的選片裡（不會自動刪除）：${esc(project.stale_clips.join("、"))}</p>` : ""}`;
   $("#openFolder").onclick = () => api("/api/open", {path: files[0]});
+  $("#clearPreviews").onclick = async () => {
+    try { const r = await api("/api/clear_previews", {work: project.work}); alert(`已清除 ${r.removed} 個預覽檔`); }
+    catch (e) { alert(e.message); }
+  };
 }
 
 // ------------------------------------------------------------- layout calibration
