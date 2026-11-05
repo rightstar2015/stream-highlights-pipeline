@@ -518,11 +518,16 @@ function renderOutputs() {
   const box = $("#outFiles");
   if (!files.length) { box.innerHTML = `<div class="empty">還沒有成品。</div>`; return; }
   box.innerHTML = `<div class="row" style="justify-content:space-between"><strong>成品</strong>
-      <button class="btn" id="openFolder">開啟資料夾</button></div>
+      <span class="row"><button class="btn" id="clearPreviews">清除預覽</button>
+      <button class="btn" id="openFolder">開啟資料夾</button></span></div>
     <ul class="files">${files.map(f => `<li><a href="${fileUrl(f)}" target="_blank">${esc(f.split(/[\\/]/).pop())}</a></li>`).join("")}</ul>
     <p class="muted">Premiere：檔案 &gt; 匯入 XML；字幕 .srt 拖到序列成為字幕軌。</p>
     ${project.stale_clips.length ? `<p class="muted" style="color:var(--warn)">這些檔案已不在目前的選片裡（不會自動刪除）：${esc(project.stale_clips.join("、"))}</p>` : ""}`;
   $("#openFolder").onclick = () => api("/api/open", {path: files[0]});
+  $("#clearPreviews").onclick = async () => {
+    try { const r = await api("/api/clear_previews", {work: project.work}); alert(`已清除 ${r.removed} 個預覽檔`); }
+    catch (e) { alert(e.message); }
+  };
 }
 
 // ------------------------------------------------------------- layout calibration
