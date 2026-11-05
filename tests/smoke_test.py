@@ -202,6 +202,13 @@ def main():
     r = urllib.request.urlopen(req)
     check(r.status == 206 and r.read() == jpg.read_bytes()[10:20], "Clip Review：檔案支援 Range（影片可拖曳）")
     try:
+        urllib.request.urlopen(urllib.request.Request(f"{base}/file?path={quote(str(jpg))}",
+                                                      headers={"Range": f"bytes={jpg.stat().st_size}-"}))
+        code = 206
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check(code == 416, "Clip Review：Range 超出檔案時回 416")
+    try:
         urllib.request.urlopen(f"{base}/file?path={quote(str(video))}")
         blocked = False
     except urllib.error.HTTPError as e:

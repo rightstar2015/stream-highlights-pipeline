@@ -111,7 +111,10 @@ class Job:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
         else:
-            os.killpg(pid, signal.SIGKILL)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:  # it just finished by itself
+                pass
         return True
 
     def start(self, kind, work, cmds):
@@ -660,6 +663,12 @@ class Handler(BaseHTTPRequestHandler):
         rng = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
         a, b = 0, size - 1
         if rng and (rng.group(1) or rng.group(2)):  # video seeking needs Range support
+            if (rng.group(1) and int(rng.group(1)) >= size) or (not rng.group(1) and int(rng.group(2)) == 0):
+                self.send_response(416)  # starts past the end: nothing to send
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if rng.group(1):
                 a = int(rng.group(1))
                 b = int(rng.group(2)) if rng.group(2) else size - 1

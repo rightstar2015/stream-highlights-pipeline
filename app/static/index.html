@@ -179,7 +179,7 @@ const $ = s => document.querySelector(s);
 const STEP_NAMES = {pipeline: "整體", check: "檢查輸入", transcribe: "轉錄（含人聲分離）", chat: "聊天室", audio: "音量",
   visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
 const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
-let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null;
+let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null, pollFails = 0;
 
 // ------------------------------------------------------------- keep review edits
 function touch() {
@@ -299,7 +299,16 @@ function renderSteps(ul, events) {
 
 async function poll() {
   clearTimeout(pollTimer);
-  const j = await api("/api/job");
+  let j;
+  try { j = await api("/api/job"); }
+  catch (e) {  // server restarting or busy: keep trying instead of freezing on "分析中…"
+    const wait = [2, 5, 10][Math.min(pollFails++, 2)];
+    for (const id of ["#jobTitle", "#outTitle"])
+      if (!$(id).closest(".card").hidden) $(id).textContent = `伺服器沒有回應，${wait} 秒後重試…`;
+    pollTimer = setTimeout(poll, wait * 1000);
+    return;
+  }
+  pollFails = 0;
   if (!j.kind) return;
   const analyze = j.kind === "analyze";
   const card = analyze ? $("#jobCard") : $("#outJob");
