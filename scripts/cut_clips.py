@@ -332,7 +332,7 @@ def render(src, info, clip, cfg, out_mp4, preview=False):
     for i, seg in enumerate(clip["_segs"]):
         if vertical:
             f = vertical_filter(lay, info["width"], info["height"], seg.get("crop"), False).replace("[0:v]", f"[{i}:v:0]")
-            vparts.append(re.sub(r"\[([a-z]+)\]", lambda mm: f"[{mm.group(1)}{i}]", f))  # labels unique per segment
+            vparts.append(re.sub(r"\[([a-z]+)\]", lambda mm, i=i: f"[{mm.group(1)}{i}]", f))  # labels unique per segment
         else:
             vparts.append(f"[{i}:v:0]setsar=1[out{i}]")
     graph = ";".join(vparts) + ";" + "".join(f"[out{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"

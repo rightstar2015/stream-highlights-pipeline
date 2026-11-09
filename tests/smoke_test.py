@@ -609,7 +609,7 @@ def main():
     ET.SubElement(sc, "width").text = "1920"
     ET.SubElement(sc, "height").text = "1080"
     ex_tracks = [ET.SubElement(exv, "track") for _ in range(3)]
-    for k, (a, b) in enumerate([(30, 60), (65, 90), (300, 330)]):
+    for a, b in [(30, 60), (65, 90), (300, 330)]:
         gi = ET.SubElement(ex_tracks[1], "generatoritem")
         ET.SubElement(gi, "start").text = str(a)
         ET.SubElement(gi, "end").text = str(b)
