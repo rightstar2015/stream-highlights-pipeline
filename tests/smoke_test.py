@@ -381,6 +381,11 @@ def main():
     good = {"id": "v01", "format": "vertical", "title": "t", "confidence": "高", "layout": {"template_png": "x"},
             "segments": [{"in": "1:00", "out": "1:20", "crop": "game", "evil": 1}]}
     fake = result({"source": "other.mp4", "clips": [{"id": "x", "format": "horizontal", "segments": [[1, 2]]}]})
+    messy = dict(good, id="v2", title=["不是字串"], summary=3, notes=[
+        {"at": "1:00", "text": "留下"}, {"at": "不是時間", "text": "丟掉"}, {"text": "沒有時間"}, "不是物件"])
+    _, md = parse_auto_output(result({"clips": [messy]}), "x.mp4")
+    check("title" not in md["clips"][0] and "summary" not in md["clips"][0]
+          and md["clips"][0]["notes"] == [{"at": "1:00", "text": "留下"}], "無頭挑選：格式不對的欄位只丟掉該欄位")
     review, draft = parse_auto_output(fake + "\n" + result({"source": "other.mp4", "clips": [good]}), "x.mp4")
     c = draft["clips"][0]
     check(review == "# 候選" and draft["source"] == "x.mp4" and c["id"] == "v01" and "layout" not in c
