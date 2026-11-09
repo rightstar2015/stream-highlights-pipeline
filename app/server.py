@@ -459,12 +459,13 @@ class Handler(BaseHTTPRequestHandler):
                        "/api/preview": self.preview, "/api/pick": self.pick,
                        "/api/open": self.open_path, "/api/review_state": self.review_state,
                        "/api/validate": self.validate, "/api/snap": self.snap, "/api/stop": self.stop,
+                       "/api/transcript": self.transcript,
                        "/api/tighten": self.tighten, "/api/clear_previews": self.clear_previews,
                        "/api/crop_state": self.crop_state, "/api/crop_frame": self.crop_frame,
                        "/api/crop_preview": self.crop_preview, "/api/crop_save": self.crop_save}.get(u.path)
             if not handler:
                 return self.send_json({"error": "not found"}, 404)
-            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap", "/api/tighten",
+            if ((u.path in ("/api/render", "/api/preview", "/api/review_state", "/api/validate", "/api/snap", "/api/tighten", "/api/transcript",
                             "/api/clear_previews")
                  or u.path.startswith("/api/crop_")) and not known_project(data.get("work", ""))):
                 return self.send_json({"error": "不是已開啟的專案"}, 403)
@@ -554,6 +555,16 @@ class Handler(BaseHTTPRequestHandler):
         issues = validate(d["clips"], load_config(meta.get("config")), video_duration(paths, meta),
                           transcript_for(paths))
         self.send_json({"issues": issues})
+
+    def transcript(self, d):
+        """Sentences around each segment (pad seconds of context on both sides), for picking cuts."""
+        segs = transcript_for(work_paths(d["work"]))
+        pad = min(max(float(d.get("pad", 10)), 0), 60)
+        out = []
+        for a, b in [(float(a), float(b)) for a, b in d["ranges"][:50]]:
+            out.append([{"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"]}
+                        for s in segs if s["end"] >= a - pad and s["start"] <= b + pad])
+        self.send_json({"segments": out})
 
     def snap(self, d):
         paths = work_paths(d["work"])

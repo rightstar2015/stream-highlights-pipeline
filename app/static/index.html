@@ -67,6 +67,17 @@ details summary { cursor: pointer; color: var(--muted); }
 .issues { grid-column: 1 / -1; font-size: 13px; }
 .issue-error { color: var(--bad); } .issue-warning { color: var(--warn); }
 .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+.tx { grid-column: 1 / -1; }
+.tx-body { max-height: 320px; overflow: auto; font-size: 13px; margin-top: 6px; }
+.tx-seg { margin: 6px 0 2px; color: var(--muted); font-weight: 600; }
+.tx-line { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; align-items: center; padding: 2px 4px; border-radius: 6px; }
+.tx-line.out { color: var(--muted); opacity: .65; }
+.tx-line.cut { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.tx-line .t { font-family: Consolas, monospace; color: var(--muted); }
+.tx-line button { padding: 0 8px; font-size: 12px; }
+.tx-mark { color: var(--accent); font-size: 12px; padding: 2px 4px; }
+.kbd { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.pv video:focus { outline: 2px solid var(--accent); }
 .layout { display: grid; grid-template-columns: 1fr 240px; gap: 16px; margin-top: 12px; align-items: start; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
 .stage { position: relative; touch-action: none; cursor: crosshair; user-select: none; line-height: 0; }
@@ -180,6 +191,8 @@ const STEP_NAMES = {pipeline: "整體", check: "檢查輸入", transcribe: "轉�
   visual: "畫面變化", vocal: "尖叫／笑聲", signals: "合併訊號、挑候選", frames: "候選截圖", auto_select: "Claude 挑選"};
 const ICON = {start: "⏳", done: "✅", fail: "❌", skip: "⏭️"};
 let project = null, clips = [], pollTimer = null, saveTimer = null, checkTimer = null, pollFails = 0;
+const txOpen = new Set();  // clip ids whose transcript panel is open
+let activeVideo = null;  // the preview the keyboard shortcuts act on
 
 // ------------------------------------------------------------- keep review edits
 function touch() {
@@ -416,10 +429,11 @@ function renderReview() {
         ${c.format === "vertical" ? `<input class="wide" type="text" data-k="header_title" value="${esc(c.header_title || "")}" placeholder="Shorts 頂部大標題">` : ""}
         <textarea class="wide" rows="${Math.max(2, c.segments.length)}" data-k="segments">${esc(c.segments.map(segToLine).join("\n"))}</textarea>
         <textarea class="wide" rows="2" data-k="notes" placeholder="1:02:07 插入驚嚇卡">${esc((c.notes || []).map(noteToLine).join("\n"))}</textarea>
-        <div class="wide muted"><span class="chip">${esc(c.from || "")}</span><span class="chip">${clipDuration(c).toFixed(1)} 秒</span>
+        <div class="wide muted"><span class="chip">${esc(c.from || "")}</span><span class="chip dur">${clipDuration(c).toFixed(1)} 秒</span>
           ${c.untight ? `<span class="chip">已剪掉停頓 ${c.untight.removed} 秒</span>` : ""}
           ${c.confidence ? `<span class="chip conf-${esc(c.confidence)}">信心 ${esc(c.confidence)}</span>` : ""}${esc(c.summary || "")}</div>
         <div class="issues"></div>
+        <details class="tx" ${txOpen.has(c.id) ? "open" : ""}><summary>逐字稿（前後各 10 秒）</summary><div class="tx-body">載入中…</div></details>
       </div>
       <div class="media"><div class="pv"></div>
         <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="btn" data-act="preview">預覽</button>
@@ -464,6 +478,11 @@ function renderReview() {
       touch();
       renderReview();
     };
+    const tx = el.querySelector(".tx");
+    tx.ontoggle = () => {
+      if (tx.open) { txOpen.add(c.id); loadTranscript(el, c); } else txOpen.delete(c.id);
+    };
+    if (tx.open) loadTranscript(el, c);
     el.querySelector("[data-act=only]").onclick = () => startRender(c);
     el.querySelector("[data-act=remove]").onclick = () => { clips.splice(+el.dataset.i, 1); touch(); renderReview(); };
     el.querySelector("[data-act=preview]").onclick = async e => {
@@ -472,7 +491,13 @@ function renderReview() {
       const ranges = c.segments.map(s => Array.isArray(s) ? [parseTs(s[0]), parseTs(s[1])] : [parseTs(s.in), parseTs(s.out)]);
       try {
         const r = await api("/api/preview", {work: project.work, ranges});
-        el.querySelector(".pv").innerHTML = `<video src="${r.url}" controls autoplay></video>`;
+        el.querySelector(".pv").innerHTML = `<video src="${r.url}" controls autoplay tabindex="0"></video>
+          <div class="kbd">空白鍵 播放／暫停　I／O 設這段的進／出點　J／L 前後 1 秒（Shift 0.1 秒）</div>`;
+        const v = el.querySelector("video");
+        v.ranges = ranges;  // preview time -> source time, for I / O
+        v.clipIndex = +el.dataset.i;
+        for (const ev of ["play", "pointerdown", "focus"]) v.addEventListener(ev, () => { activeVideo = v; });
+        activeVideo = v;
       } catch (err) { alert(err.message); }
       e.target.disabled = false; e.target.textContent = "預覽";
     };
@@ -496,6 +521,84 @@ function renderReview() {
   scheduleCheck();
   $("#renderBar").hidden = !$("#tab-review").classList.contains("on") || !clips.length;
 }
+
+// ------------------------------------------------------------- transcript and cut points
+const segRange = s => Array.isArray(s) ? [parseTs(s[0]), parseTs(s[1])] : [parseTs(s.in), parseTs(s.out)];
+
+function setCut(c, k, which, t) {
+  // keep the segment's shape (and crop); refuse a cut that would make it empty
+  const [a, b] = segRange(c.segments[k]);
+  const na = which === "in" ? t : a, nb = which === "out" ? t : b;
+  if (!(nb - na > 0.1)) return false;
+  const s = c.segments[k];
+  c.segments[k] = Array.isArray(s) ? [fmtTs(na), fmtTs(nb)] : {...s, in: fmtTs(na), out: fmtTs(nb)};
+  return true;
+}
+
+function refreshClip(el, c, msg) {
+  // update in place: a full re-render would drop the preview video and its playback position
+  el.querySelector("[data-k=segments]").value = c.segments.map(segToLine).join("\n");
+  el.querySelector(".dur").textContent = `${clipDuration(c).toFixed(1)} 秒`;
+  const kbd = el.querySelector(".kbd");
+  if (kbd && msg) kbd.textContent = msg + "（預覽要重新產生才會反映）";
+  touch();
+  updateCount();
+  if (txOpen.has(c.id)) loadTranscript(el, c);
+}
+
+async function loadTranscript(el, c) {
+  const body = el.querySelector(".tx-body");
+  const ranges = c.segments.map(segRange);
+  let r;
+  try { r = await api("/api/transcript", {work: project.work, ranges, pad: 10}); }
+  catch (e) { body.textContent = e.message; return; }
+  body.innerHTML = r.segments.map((lines, k) => {
+    const [a, b] = ranges[k];
+    const rows = [];
+    let inShown = false, outShown = false;
+    for (const [n, s] of lines.entries()) {
+      if (!inShown && s.end > a) { rows.push(`<div class="tx-mark">▶ 進點 ${fmtTs(a)}</div>`); inShown = true; }
+      if (!outShown && s.start >= b) { rows.push(`<div class="tx-mark">■ 出點 ${fmtTs(b)}</div>`); outShown = true; }
+      const mid = (s.start + s.end) / 2, cut = (s.start < a && a < s.end) || (s.start < b && b < s.end);
+      rows.push(`<div class="tx-line ${mid < a || mid > b ? "out" : ""} ${cut ? "cut" : ""}" title="${cut ? "剪點切在這句中間" : ""}">
+        <span class="t">${fmtTs(s.start)}</span><span>${esc(s.text)}</span>
+        <span><button class="btn" data-seg="${k}" data-n="${n}" data-set="in" title="從這句開始">進</button>
+        <button class="btn" data-seg="${k}" data-n="${n}" data-set="out" title="在這句結束">出</button></span></div>`);
+    }
+    if (!inShown) rows.push(`<div class="tx-mark">▶ 進點 ${fmtTs(a)}</div>`);
+    if (!outShown) rows.push(`<div class="tx-mark">■ 出點 ${fmtTs(b)}</div>`);
+    return `<div class="tx-seg">第 ${k + 1} 段 ${fmtTs(a)} – ${fmtTs(b)}</div>` + (lines.length ? rows.join("") : `<div class="muted">這段沒有逐字稿</div>`);
+  }).join("");
+  body.querySelectorAll("[data-set]").forEach(btn => btn.onclick = () => {
+    const k = +btn.dataset.seg, s = r.segments[k][+btn.dataset.n];
+    // a little air around the sentence, like 對齊句子
+    const t = btn.dataset.set === "in" ? Math.max(0, s.start - 0.15) : s.end + 0.2;
+    if (!setCut(c, k, btn.dataset.set, t)) return alert("這樣設會讓這段的出點早於進點");
+    refreshClip(el, c, `第 ${k + 1} 段${btn.dataset.set === "in" ? "進" : "出"}點改成 ${fmtTs(t)}`);
+  });
+}
+
+addEventListener("keydown", e => {
+  const v = activeVideo;
+  if (!v || !v.isConnected || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest("input, textarea, select") || !$("#tab-review").classList.contains("on")) return;
+  const key = e.key.toLowerCase();
+  const step = e.shiftKey ? 0.1 : 1;
+  if (key === " ") { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+  else if (key === "j") { e.preventDefault(); v.currentTime = Math.max(0, v.currentTime - step); }
+  else if (key === "l") { e.preventDefault(); v.currentTime = Math.min(v.duration || 1e9, v.currentTime + step); }
+  else if (key === "i" || key === "o") {
+    e.preventDefault();
+    // which segment is playing, and where that is in the stream
+    let t = v.currentTime, k = 0;
+    while (k < v.ranges.length - 1 && t > v.ranges[k][1] - v.ranges[k][0]) { t -= v.ranges[k][1] - v.ranges[k][0]; k++; }
+    const src = v.ranges[k][0] + t, c = clips[v.clipIndex];
+    const el = document.querySelector(`#clipList .clip[data-i="${v.clipIndex}"]`);
+    if (!c || !el || k >= c.segments.length) return;
+    if (!setCut(c, k, key === "i" ? "in" : "out", src)) return;
+    refreshClip(el, c, `第 ${k + 1} 段${key === "i" ? "進" : "出"}點改成 ${fmtTs(src)}`);
+  }
+});
 
 function updateCount() {
   const on = clips.filter(c => c.on);
