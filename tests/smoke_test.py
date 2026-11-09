@@ -293,6 +293,10 @@ def main():
     pv_file.write_bytes(pv)
     check(abs(probe(pv_file)[2] - 3) < 0.5, "API 預覽：兩段接起來約 3 秒")
     check(status("/api/preview", {"work": str(W4), "ranges": [[0, 16 * 60]]}) == 400, "API 預覽：超過 15 分鐘會擋下")
+    tx = post("/api/transcript", {"work": str(W4), "ranges": [[100, 105], [200, 201]], "pad": 3})["segments"]
+    check(len(tx) == 2 and any("等一下" in s["text"] for s in tx[0]) and all(s["end"] >= 97 and s["start"] <= 108 for s in tx[0]),
+          "審核頁逐字稿：每段列出前後幾秒內的句子")
+    check(status("/api/transcript", {"work": str(OUT), "ranges": [[0, 1]]}) == 403, "審核頁逐字稿：只接受已開啟的專案")
     silent = OUT / "silent.mp4"
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6",
                     "-c:v", "libx264", "-preset", "ultrafast", str(silent)], check=True)
