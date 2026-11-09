@@ -11,7 +11,6 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 from common import atomic_write, need_tool, work_paths
 

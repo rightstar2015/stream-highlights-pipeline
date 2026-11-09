@@ -22,7 +22,6 @@ import argparse
 import importlib.util
 import json
 import os
-import os
 import re
 import shutil
 import subprocess
@@ -31,7 +30,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from common import (CLIP_ID, SKILL_DIR, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
+from common import (CLIP_ID, SKILL_DIR, atomic_write, default_workdir, find_config, fmt_ts, load_config, load_json, normalize_segments,
                     parse_ts, probe, save_json, vfr_warning, work_paths)
 from validate_selections import validate
 
@@ -195,6 +194,17 @@ def limit_picks(clips, limits):
     return kept, dropped
 
 
+def clean_note(n):
+    """{"at", "text"} with a readable time and a string text, or None."""
+    if not isinstance(n, dict) or not isinstance(n.get("text"), str) or isinstance(n.get("at"), bool):
+        return None
+    try:
+        parse_ts(n.get("at"))
+    except (TypeError, ValueError):
+        return None
+    return {"at": n["at"], "text": n["text"]}
+
+
 def parse_auto_output(text, source):
     """Validate Claude's printed result -> (review markdown, draft dict). Anything outside the
     known clip fields (e.g. a "layout" override) is dropped, since this text was shaped by
@@ -218,6 +228,12 @@ def parse_auto_output(text, source):
         if c.get("format") not in ("vertical", "horizontal"):
             raise ValueError(f"{c['id']} 的 format 不正確")
         clean = {k: c[k] for k in CLIP_KEYS if k in c}
+        for k in ("title", "header_title", "summary", "confidence"):
+            if k in clean and not isinstance(clean[k], str):
+                del clean[k]
+        if "notes" in clean:
+            clean["notes"] = [clean_note(n) for n in clean["notes"]] if isinstance(clean["notes"], list) else []
+            clean["notes"] = [n for n in clean["notes"] if n]
         if not isinstance(c.get("segments"), list) or not c["segments"]:
             raise ValueError(f"{c['id']} 沒有 segments")
         clean["segments"] = [clean_segment(s) for s in c["segments"]]
@@ -305,11 +321,18 @@ def auto_select(args, paths, log):
             if dropped:
                 names = "、".join(str(c.get("title") or c["id"]) for c in dropped)
                 review += f"\n\n（超過推薦上限，未放進草稿：{names}）"
-            paths["review"].write_text(review + "\n", encoding="utf-8")
+            with atomic_write(paths["review"]) as f:
+                f.write(review + "\n")
             save_json(draft, paths["draft"])
             segs = load_json(paths["transcript_json"])["segments"] if paths["transcript_json"].exists() else []
             warning = coverage_warning(review, segs[-1]["end"] if segs else 0)
-            issues = validate(draft["clips"], load_config(args.config), probe(args.video)["duration"], segs)
+            try:
+                duration = probe(args.video)["duration"]
+            except (RuntimeError, SystemExit, KeyError, ValueError):
+                duration = None
+                note = "讀不到直播長度，沒有檢查推薦片段是否超出直播"
+                warning = f"{warning}；{note}" if warning else note
+            issues = validate(draft["clips"], load_config(args.config), duration, segs)
             if issues:
                 note = f"推薦片段有 {len(issues)} 項提醒，請在審核時確認"
                 warning = f"{warning}；{note}" if warning else note

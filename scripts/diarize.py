@@ -13,7 +13,6 @@ import argparse
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 from common import load_config, load_json, need_tool, normalize_segments, save_json, work_paths
 

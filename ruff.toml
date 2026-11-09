@@ -1,0 +1,8 @@
+# Only rules that point at real mistakes; style is left alone.
+# B905 (zip without strict=) is off: the zips here pair lists built to the same length.
+target-version = "py311"
+line-length = 130
+
+[lint]
+select = ["F", "E9", "B"]
+ignore = ["B905"]

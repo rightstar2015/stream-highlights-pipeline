@@ -46,7 +46,7 @@ def bmp_safe_source(src):
         try:
             os.link(src, safe)
         except OSError as e:
-            raise SystemExit(f"[錯誤] 直播檔名含 emoji，Premiere 無法匯入；建立硬連結失敗（{e}），請把檔名的 emoji 拿掉再執行")
+            raise SystemExit(f"[錯誤] 直播檔名含 emoji，Premiere 無法匯入；建立硬連結失敗（{e}），請把檔名的 emoji 拿掉再執行") from e
         print(f"[提示] 直播檔名含 emoji，Premiere 讀不了，已建立硬連結（不佔額外空間）→ {safe.name}")
     return safe
 
@@ -279,7 +279,7 @@ def build_sequence(root_children, reg, name, seq_w, seq_h, fps, pieces, uid, not
     sub(asc, "samplerate", 48000)
     atracks = [sub(audio, "track"), sub(audio, "track")]
 
-    for k, ((path, info, a, b), (fi, fo, start)) in enumerate(zip(pieces, frames)):
+    for k, ((path, info, _, _), (fi, fo, start)) in enumerate(zip(pieces, frames)):
         end = start + (fo - fi)
         vid, aid = f"{uid}-v{k}", f"{uid}-a{k}"
         has_audio = "audio_channels" in info

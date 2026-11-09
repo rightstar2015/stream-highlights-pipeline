@@ -45,7 +45,7 @@ app/server.py                   Clip Review：本機網頁介面（只用標準�
 app/static/index.html           單頁前端（分析／審核／出片／版型校正）
 start_clip_review.bat／.sh      啟動 Clip Review
 run_overnight.bat／.sh          排程整晚跑分析＋Claude 挑選的範例
-.github/workflows/smoke.yml     在 Windows、Linux、macOS 跑 smoke test
+.github/workflows/smoke.yml     在 Windows、Linux、macOS 跑 smoke test，並用 ruff 檢查（規則在 ruff.toml）
 tests/smoke_test.py             合成素材端對端測試（只需 ffmpeg＋numpy，約 2–3 分鐘；不測 whisper／demucs 本身）
 ```
 

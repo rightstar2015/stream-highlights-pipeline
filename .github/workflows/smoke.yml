@@ -30,5 +30,6 @@ jobs:
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - run: pip install "numpy>=1.26,<3"
+      - run: pip install "numpy>=1.26,<3" "ruff==0.17.4"
+      - run: ruff check scripts app tools tests
       - run: python tests/smoke_test.py
