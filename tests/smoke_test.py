@@ -506,8 +506,14 @@ def main():
     check([who.resolve(s) for s in ("S0", "S1", "S2", "S3", "S9")] == ["小明", "阿花", "小明", UNSURE, "S9"],
           "說話者對照：新舊兩種 config 格式、merge、ignore 都認得")
     w = lambda t: {"start": t - 0.05, "end": t + 0.05, "word": "字"}  # noqa: E731
-    check(who.label_words([w(0.5), w(1.5), w(3.5), w(4.5), w(6.5), w(8.5)]) == ["小明", OVERLAP, "小明", "小明", UNSURE, "小明"],
-          "說話者：逐字標記，重疊標 overlap，沒人說話的字沿用最近的人，ignore 不算人，合併成同一人不算重疊")
+    check(who.label_words([w(0.5), w(1.5), w(3.5), w(4.5), w(6.5), w(8.5)]) == ["小明", "小明", "小明", "小明", UNSURE, "小明"],
+          "說話者：沒人說話的字沿用同句的人，重疊歸給同句主要說話者，ignore 維持未確定，合併成同一人不算重疊")
+    who2 = Speakers([[0, 1, "A"], [1, 3, "B"], [1, 3, "C"]])
+    check(who2.label_words([w(0.5), w(1.5), w(2.5)]) == ["A", OVERLAP, OVERLAP], "說話者：主要說話者不在重疊裡就維持 overlap")
+    slip = Speakers([[0, 1, "A"], [1, 1.3, "B"], [1.3, 3, "A"]])
+    check(slip.label_words([w(0.5), w(1.1), w(1.2), w(2)]) == ["A"] * 4, "說話者：一句中間 1–2 個字跳到別人視為誤判，改回前後的人")
+    keep = Speakers([[0, 1, "A"], [1, 2.3, "B"], [2.3, 3, "A"]])
+    check(keep.label_words([w(0.5), w(1.2), w(1.6), w(2.0), w(2.6)]) == ["A", "B", "B", "B", "A"], "說話者：一句中間換人較長就保留")
     ic = mark_interjections([[0, 1, "我們走", "小明", 0.9], [1, 1.5, "嗯", "阿花", 0.2], [1.5, 3, "往這邊", "小明", 1.2],
                              [3, 4, "對啊對啊", "阿花", 0.9]])
     check([c[3] for c in ic] == ["小明", UNSURE, "小明", "阿花"], "說話者：夾在同一人中間的極短附和改標未確定")
@@ -704,7 +710,7 @@ def main():
     plain = {p.name: p.read_bytes() for p in (W / "clips").glob("*.srt")}
     (W / "speakers.json").write_text(json.dumps({"source": {"name": Path(sel["source"]).name}, "turns": [
         [97, 100, "SPEAKER_00"], [100.8, 102.0, "SPEAKER_01"], [102.0, 104.5, "SPEAKER_00"],
-        [106, 108, "SPEAKER_00"], [106.8, 108, "SPEAKER_01"], [109, 110.5, "SPEAKER_02"]]}), encoding="utf-8")
+        [106, 108, "SPEAKER_00"], [106, 108, "SPEAKER_01"], [109, 110.5, "SPEAKER_02"]]}), encoding="utf-8")
     (W / "speaker_map.json").write_text(json.dumps({"SPEAKER_00": "小明", "SPEAKER_01": "阿花", "SPEAKER_02": "ignore"},
                                                    ensure_ascii=False), encoding="utf-8")
     sh("cut_clips.py", "--workdir", W, "--only", "v01", "--srt-only")

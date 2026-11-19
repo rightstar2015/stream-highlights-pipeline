@@ -68,10 +68,17 @@ class Speakers:
 
     def label_words(self, words):
         """One label per word of one transcript segment: a name, OVERLAP or UNSURE.
-        A word no turn covers takes the nearest named word of the same segment."""
-        labs, fill = [], []
+
+        Whisper writes down one voice per segment, so the segment is the unit we trust most:
+        - a word no turn covers takes the nearest named word of the same segment;
+        - an overlapped word goes to the segment's main speaker when that person is one of the
+          voices there (another voice laughing or saying "嗯" under them is the usual case);
+        - a flip of 1-2 words (< SLIP_SEC) to someone else inside one person's segment is taken as
+          diarization jitter and given back. Ignored clusters are never filled or smoothed over."""
+        labs, sets, fill = [], [], []
         for w in words:
             names, ignored = self.at((w["start"] + w["end"]) / 2)
+            sets.append(names)
             if len(names) == 1:
                 labs.append(next(iter(names)))
             elif len(names) > 1:
@@ -80,13 +87,43 @@ class Speakers:
                 labs.append(UNSURE)
                 if not ignored:
                     fill.append(len(labs) - 1)
-        named = [i for i, x in enumerate(labs) if x not in (UNSURE, OVERLAP)]
+        named = [i for i, x in enumerate(labs) if is_person(x)]
         for i in fill:
             if named:
                 mid = (words[i]["start"] + words[i]["end"]) / 2
                 j = min(named, key=lambda k: abs((words[k]["start"] + words[k]["end"]) / 2 - mid))
                 labs[i] = labs[j]
-        return labs
+        counts = {}
+        for x in labs:
+            if is_person(x):
+                counts[x] = counts.get(x, 0) + 1
+        if counts:
+            main = max(counts, key=counts.get)
+            if counts[main] * 2 >= sum(counts.values()):
+                labs = [main if x == OVERLAP and main in sets[i] else x for i, x in enumerate(labs)]
+        return smooth_slips(labs, words)
+
+
+SLIP_WORDS, SLIP_SEC = 2, 0.6
+
+
+def smooth_slips(labs, words):
+    """Give a short run of another label back to the person talking on both sides of it."""
+    runs, i = [], 0
+    while i < len(labs):
+        j = i
+        while j + 1 < len(labs) and labs[j + 1] == labs[i]:
+            j += 1
+        runs.append([i, j])
+        i = j + 1
+    for k in range(1, len(runs) - 1):
+        (pa, _), (a, b), (na, _) = runs[k - 1], runs[k], runs[k + 1]
+        side = labs[pa]
+        if labs[a] != UNSURE and is_person(side) and labs[na] == side != labs[a] and \
+                b - a + 1 <= SLIP_WORDS and words[b]["end"] - words[a]["start"] < SLIP_SEC:
+            for x in range(a, b + 1):
+                labs[x] = side
+    return labs
 
 
 def is_person(label):
