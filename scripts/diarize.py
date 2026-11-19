@@ -23,7 +23,7 @@ import sys
 
 from pathlib import Path
 
-import speakers as spk
+import speakers as spkmod
 from common import fmt_ts, load_config, load_json, need_tool, normalize_segments, save_json, work_paths
 
 MODEL = "pyannote/speaker-diarization-community-1"
@@ -143,7 +143,7 @@ def main():
 
     turns = load_json(store)["turns"]
     work_map = paths["dir"] / "speaker_map.json"
-    who = spk.Speakers(turns, spk.name_map(cfg.get("speakers"), load_json(work_map) if work_map.exists() else None))
+    who = spkmod.Speakers(turns, spkmod.name_map(cfg.get("speakers"), load_json(work_map) if work_map.exists() else None))
     names = {s: who.resolve(s) for _, _, s in turns}
     done = 0
     for c in load_json(paths["clips"] / "manifest.json")["clips"]:
