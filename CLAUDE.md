@@ -38,6 +38,7 @@ scripts/
   learn_feedback.py             比對草稿與最終選片，寫入 references/feedback_log.md（不進 git）
   suggest_terms.py              比對校正前後的 SRT，建議 text_replacements（不會自動寫入）
   diarize.py                    選用：pyannote 說話者辨識 → speakers.json 與帶標籤的 SRT（草稿）
+  speakers.py                   speakers.json → 每個字的說話者；speaker_map.json／config 的命名、merge、ignore
   setup_check.py                環境檢查
 tools/eval_selections.py        拿人工選片評估推薦或候選：每支涵蓋率、精準度、最佳名次
 tools/privacy_check.py          用不進 git 的 references/private_terms.txt 掃描被追蹤的檔案；smoke test 一開始就跑

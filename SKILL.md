@@ -138,7 +138,12 @@ python scripts/export_premiere_xml.py --workdir WORK
 
 ## 5.5 說話者標籤（選用，多人連動時）
 
-使用者想依說話者分軌字卡時：`python scripts/diarize.py --video 直播.mp4 --workdir WORK`，再 `python scripts/diarize.py --workdir WORK --label`，產生 `_說話者.srt`。需要 pyannote 和 Hugging Face 登入（見 README）。實測約 76% 正確，要告訴使用者這是草稿。
+使用者想依說話者分軌字卡時（需要 pyannote 和 Hugging Face 登入，見 README）：
+1. 先問人數和成員名字（人數寫進 config 的 `speakers.count` 或加 `--num-speakers`，模型比較不會把同一人拆成兩群）：`python scripts/diarize.py --video 直播.mp4 --workdir WORK --num-speakers 3`。
+2. 腳本會列出每個群（SPEAKER_00…）的說話總長和最長獨白的時間。請使用者聽那一段，把對照寫進 `WORK/speaker_map.json`：`{"SPEAKER_00": "名字", "SPEAKER_02": "merge:SPEAKER_00", "SPEAKER_03": "ignore"}`（同一人被拆成兩群用 merge，遊戲語音、配樂等不是人的群用 ignore）。名字不要自己猜。
+3. 有 `speakers.json` 時，`cut_clips.py`（或只重產字幕的 `cut_clips.py --srt-only`）會在換人時斷句，並另外輸出每人一個 `<片名>_<名字>.srt`，只含這個人的句子、其他時段空白；重疊、沒人認領或 ignore 的句子放 `<片名>_未確定.srt`。原本的 `<片名>.srt` 照樣有。不想分軌時加 `--no-speakers`。
+4. 告訴使用者：在 Premiere 分別匯入這些 SRT，各自成為一條字幕軌，再依 `_未確定.srt` 補判；分好軌後可接第 6 步放頭像。實測約 76% 正確，一定要說這是草稿。
+5. 只想在每句前加 `[名字]` 時：`python scripts/diarize.py --workdir WORK --label`，產生 `_說話者.srt`。
 
 ## 6. 說話者頭像（選用，使用者後製時）
 
