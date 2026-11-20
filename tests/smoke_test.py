@@ -500,6 +500,23 @@ def main():
     got = label_srt(srt, [{"a": 10, "b": 20}, {"a": 20, "b": 30}], turns, {"A": "小明"})
     check("[小明] 第一句" in got and "[B] 第二句" in got and "00:00:11,000 --> 00:00:12,000" in got,
           f"說話者：SRT 加上標籤，時間不變（{got!r}）")
+    from speakers import OVERLAP, UNSURE, Speakers, mark_interjections, name_map
+    nm = name_map({"count": 2, "names": ["小明"], "map": {"S1": "阿花"}, "S0": "小明"}, {"S2": "merge:S0", "S3": "ignore"})
+    who = Speakers([[0, 2, "S0"], [1, 3, "S1"], [4, 5, "S2"], [6, 7, "S3"], [8, 9, "S2"], [8, 9, "S0"]], nm)
+    check([who.resolve(s) for s in ("S0", "S1", "S2", "S3", "S9")] == ["小明", "阿花", "小明", UNSURE, "S9"],
+          "說話者對照：新舊兩種 config 格式、merge、ignore 都認得")
+    w = lambda t: {"start": t - 0.05, "end": t + 0.05, "word": "字"}  # noqa: E731
+    check(who.label_words([w(0.5), w(1.5), w(3.5), w(4.5), w(6.5), w(8.5)]) == ["小明", "小明", "小明", "小明", UNSURE, "小明"],
+          "說話者：沒人說話的字沿用同句的人，重疊歸給同句主要說話者，ignore 維持未確定，合併成同一人不算重疊")
+    who2 = Speakers([[0, 1, "A"], [1, 3, "B"], [1, 3, "C"]])
+    check(who2.label_words([w(0.5), w(1.5), w(2.5)]) == ["A", OVERLAP, OVERLAP], "說話者：主要說話者不在重疊裡就維持 overlap")
+    slip = Speakers([[0, 1, "A"], [1, 1.3, "B"], [1.3, 3, "A"]])
+    check(slip.label_words([w(0.5), w(1.1), w(1.2), w(2)]) == ["A"] * 4, "說話者：一句中間 1–2 個字跳到別人視為誤判，改回前後的人")
+    keep = Speakers([[0, 1, "A"], [1, 2.3, "B"], [2.3, 3, "A"]])
+    check(keep.label_words([w(0.5), w(1.2), w(1.6), w(2.0), w(2.6)]) == ["A", "B", "B", "B", "A"], "說話者：一句中間換人較長就保留")
+    ic = mark_interjections([[0, 1, "我們走", "小明", 0.9], [1, 1.5, "嗯", "阿花", 0.2], [1.5, 3, "往這邊", "小明", 1.2],
+                             [3, 4, "對啊對啊", "阿花", 0.9]])
+    check([c[3] for c in ic] == ["小明", UNSURE, "小明", "阿花"], "說話者：夾在同一人中間的極短附和改標未確定")
 
     from pipeline import limit_picks
     picks = [{"id": f"v{i}", "format": "vertical", "confidence": c} for i, c in enumerate(["低", "中", "高", "高"])]
@@ -688,6 +705,54 @@ def main():
     man = json.loads((W / "clips" / "manifest.json").read_text(encoding="utf-8"))
     check(mp4.stat().st_mtime == mtime and [c["id"] for c in man["clips"]] == ["v01", "h01"],
           "--srt-only 不重出影片，--only 不會弄丟其他片的 manifest")
+
+    # per-speaker subtitles from a hand-written speakers.json (pyannote itself is not run)
+    plain = {p.name: p.read_bytes() for p in (W / "clips").glob("*.srt")}
+    (W / "speakers.json").write_text(json.dumps({"source": {"name": Path(sel["source"]).name}, "turns": [
+        [97, 100, "SPEAKER_00"], [100.8, 102.0, "SPEAKER_01"], [102.0, 104.5, "SPEAKER_00"],
+        [106, 108, "SPEAKER_00"], [106, 108, "SPEAKER_01"], [109, 110.5, "SPEAKER_02"]]}), encoding="utf-8")
+    (W / "speaker_map.json").write_text(json.dumps({"SPEAKER_00": "小明", "SPEAKER_01": "阿花", "SPEAKER_02": "ignore"},
+                                                   ensure_ascii=False), encoding="utf-8")
+    sh("cut_clips.py", "--workdir", W, "--only", "v01", "--srt-only")
+
+    def cues_of(p):
+        blocks = [b.splitlines() for b in p.read_text(encoding="utf-8-sig").strip().split("\n\n") if b.strip()]
+        return [(b[1], b[2]) for b in blocks]
+    clips_dir = W / "clips"
+    main_cues = cues_of(clips_dir / "v01_打王暴斃.srt")
+    per = {n: cues_of(clips_dir / f"v01_打王暴斃_{n}.srt") for n in ("小明", "阿花", "未確定")}
+    man = json.loads((clips_dir / "manifest.json").read_text(encoding="utf-8"))
+    entry = next(c for c in man["clips"] if c["id"] == "v01")
+    check(sorted(entry.get("speaker_srts", {})) == ["小明", "未確定", "阿花"], f"分軌：每人一個 SRT（{entry.get('speaker_srts')}）")
+    check(per["阿花"] == [(t, x) for t, x in main_cues if x == "高品質重"] and per["阿花"] and
+          any(x.startswith("轉字幕") for _, x in per["小明"]), f"分軌：換人一定斷句（{main_cues}）")
+    check(sorted(sum(per.values(), [])) == sorted(main_cues), "分軌：每句只在一個人的檔案裡，時間與主字幕相同")
+    check(any("你們不要笑啦" in x for _, x in per["未確定"]) and any("可能" in x for _, x in per["未確定"])
+          and not any("你們" in x or "可能" in x for _, x in per["小明"] + per["阿花"]),
+          f"分軌：重疊和標成 ignore 的句子進「未確定」（{per['未確定']}）")
+    check(any("不要不要" in x for _, x in per["小明"]), "分軌：沒有人覆蓋的字沿用同一句裡的說話者")
+    check(cues_of(clips_dir / "v01_打王暴斃_小明.srt")[0] and
+          (clips_dir / "v01_打王暴斃_小明.srt").read_text(encoding="utf-8-sig").startswith("1\n"), "分軌：編號從 1 重排")
+
+    # a renamed speaker leaves no stale file; another stream's speakers.json is not used
+    (W / "speaker_map.json").write_text(json.dumps({"SPEAKER_00": "小明", "SPEAKER_01": "merge:SPEAKER_00",
+                                                    "SPEAKER_02": "ignore"}), encoding="utf-8")
+    sh("cut_clips.py", "--workdir", W, "--only", "v01", "--srt-only")
+    check(not (clips_dir / "v01_打王暴斃_阿花.srt").exists() and (clips_dir / "v01_打王暴斃_小明.srt").exists(),
+          "分軌：合併後舊的分軌檔會刪掉")
+    sp = json.loads((W / "speakers.json").read_text(encoding="utf-8"))
+    (W / "speakers.json").write_text(json.dumps(dict(sp, source={"name": "別場.mp4"})), encoding="utf-8")
+    r = subprocess.run([PY, "cut_clips.py", "--workdir", str(W), "--only", "v01", "--srt-only"], cwd=SCRIPTS,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(r.returncode == 0 and "另一個直播檔" in r.stdout and not (clips_dir / "v01_打王暴斃_小明.srt").exists(),
+          "分軌：別場直播的 speakers.json 不會用，也不留舊分軌")
+    (W / "speakers.json").unlink()
+    (W / "speaker_map.json").unlink()
+    sh("cut_clips.py", "--workdir", W, "--only", "v01", "--srt-only")
+    check({p.name: p.read_bytes() for p in clips_dir.glob("*.srt")} == plain and
+          "speaker_srts" not in next(c for c in json.loads((clips_dir / "manifest.json").read_text(encoding="utf-8"))["clips"]
+                                     if c["id"] == "v01"),
+          "分軌：沒有 speakers.json 時字幕與改版前逐位元相同")
 
     # interrupted writes leave the old file, and a cut-off JSON doesn't count as a finished step
     from common import atomic_write

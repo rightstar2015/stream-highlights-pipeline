@@ -143,14 +143,27 @@ macOS／Linux 用 `ln -s "<這個資料夾的完整路徑>" ~/.claude/skills/str
 
 1. 到 [模型頁面](https://huggingface.co/pyannote/speaker-diarization-community-1) 同意條款，建立 Read 權限的 token，執行 `hf auth login` 登入。
 2. 建議裝在獨立環境，以免影響其他套件：`pip install pyannote.audio`
-3. 執行（整場約 2 分鐘／小時）：
+3. 執行（整場約 2 分鐘／小時）。知道人數就加 `--num-speakers`（或寫在 config 的 `speakers.count`），比較不會把同一人拆成兩位：
 
 ```
-python scripts/diarize.py --video 直播.mp4 --workdir 工作資料夾
-python scripts/diarize.py --workdir 工作資料夾 --label
+python scripts/diarize.py --video 直播.mp4 --workdir 工作資料夾 --num-speakers 3
 ```
 
-會產生 `clips/<片名>_說話者.srt`。在 `config.json` 加上 `"speakers": {"SPEAKER_01": "名字"}` 就會顯示名字。
+4. 腳本會列出每位說話者（SPEAKER_00…）的最長獨白時間，聽過後在工作資料夾建立 `speaker_map.json` 寫上名字：
+
+```json
+{"SPEAKER_00": "小明", "SPEAKER_01": "阿花", "SPEAKER_02": "merge:SPEAKER_00", "SPEAKER_03": "ignore"}
+```
+
+同一人被拆成兩位用 `merge:`，遊戲語音、配樂等不是人的用 `ignore`。
+
+5. 之後出片（或只重產字幕：`cut_clips.py --srt-only`）時，字幕會在換人時斷句，並另外產生：
+   - `clips/<片名>_<名字>.srt`：每人一個，只有這個人的句子，其他時段空白。
+   - `clips/<片名>_未確定.srt`：兩人同時說話、沒人認領或標成 ignore 的句子。
+
+在 Premiere 分別匯入這些 SRT，各自就是一條字幕軌，再對照畫面修正，分好軌後可以用 `avatar_tracks.py` 放頭像。原本的 `<片名>.srt` 照樣產生；不想分軌時加 `--no-speakers`。
+
+只想在每句前面加上 `[名字]`：`python scripts/diarize.py --workdir 工作資料夾 --label`，會產生 `clips/<片名>_說話者.srt`。
 
 ## 語言設定
 

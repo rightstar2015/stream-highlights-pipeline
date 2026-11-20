@@ -38,6 +38,7 @@ scripts/
   learn_feedback.py             比對草稿與最終選片，寫入 references/feedback_log.md（不進 git）
   suggest_terms.py              比對校正前後的 SRT，建議 text_replacements（不會自動寫入）
   diarize.py                    選用：pyannote 說話者辨識 → speakers.json 與帶標籤的 SRT（草稿）
+  speakers.py                   speakers.json → 每個字的說話者；speaker_map.json／config 的命名、merge、ignore
   setup_check.py                環境檢查
 tools/eval_selections.py        拿人工選片評估推薦或候選：每支涵蓋率、精準度、最佳名次
 tools/privacy_check.py          用不進 git 的 references/private_terms.txt 掃描被追蹤的檔案；smoke test 一開始就跑
@@ -93,6 +94,7 @@ Clip Review 的介面：`pipeline.py` 的 `@@ {...}` 進度行、`WORK/studio.js
 
 - `diarize.py`（pyannote community-1，三人連動 7 小時 55 分，全場約 16 分鐘）：以畫面上語音軟體頭像的亮暗當正解，10 段共 50 分鐘中只有一人說話的時段準確度 76.5%；分出 4 群，比實際多 1 群。單人直播 30 分鐘也會多抓一位（7–8%）。所以只當草稿、預設不跑、不進 requirements。
 
+- 分軌字幕（階段一，另一場三人連動 9 小時 49 分，`--num-speakers 3`，與轉錄同時跑約 48 分鐘）：分出 3 群，片尾逐字稿確認其中一群是主播。挑 3 段換人最頻繁的 90 秒輸出：第一版重疊的字一律進未確定，未確定占 23–31%，主字幕句數比不分軌多約 50%（很多句只剩 1–2 字）；改成「重疊的字給同一句的主要說話者（若他在重疊名單內）」「一句中間 1–2 字跳到別人改回前後的人」後，未確定降到 6–7%，句數只多 8–17%。正確率沒有量（這場沒有頭像亮暗可當正解），Premiere 匯入也還沒試。
 - `tighten.py`：第一版只看逐字稿，s04（直式、3 段）從 38.5 秒剪到 31.8 秒，使用者看過：拉長的字尾、氣音常被剪掉，因為 Whisper 的字時間只涵蓋字的開頭。改用 vocals16k.wav 的 50 ms 音量後，同一支剪到 34.0 秒；同一場其他 5 支剪掉 0–3.7 秒。新版還沒有人聽過。
 - 出片改成一次編碼（每段一個 `-ss/-t` 輸入、concat filter、接點 12 ms 淡入淡出）＋兩階段 loudnorm：舊做法在合成素材的接點有 37 ms 靜音、聲音比影像長 62 ms；新做法 s04（直式、6 段、版型 PNG）8.8 秒輸出，影像與聲音都是 34.000 秒、接點沒有長於 20 ms 的靜音、-14.4 LUFS。還沒有人聽過接點。
 - `--auto-select` 的暫存資料夾：實際用 `claude -p` 確認讀得到 SKILL.md、frames.py 能寫入 WORK，Glob `_eval/` 被拒絕。完整挑選沒有重跑。

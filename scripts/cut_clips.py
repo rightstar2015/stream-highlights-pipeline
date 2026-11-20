@@ -22,6 +22,9 @@ Reads WORK/selections.json:
 - Optional per clip "layout": {...} overrides vertical_layout keys.
 
 Writes WORK/clips/<id>_<title>.mp4 and .srt, plus clips/manifest.json.
+With WORK/speakers.json (diarize.py) a cue never holds two speakers' words, and each clip also gets
+<id>_<title>_<name>.srt per speaker plus <id>_<title>_未確定.srt (overlap / unattributed lines);
+manifest "speaker_srts" lists them. --no-speakers turns this off.
 --preview renders one still per segment (fast check of crops / layout).
 """
 import argparse
@@ -31,6 +34,7 @@ import re
 import sys
 from pathlib import Path
 
+import speakers as spk
 from common import (SKILL_DIR, atomic_output, atomic_write, fmt_ts, load_best_transcript, load_config, load_json, need_tool,
                     normalize_segments, parse_ts, probe, run, save_json,
                     source_to_clip_time, work_paths)
@@ -123,10 +127,11 @@ def clip_stem(clip):
 
 # ---------------- subtitles ----------------
 
-def phrases_in(segs, a, b, pause):
+def phrases_in(segs, a, b, pause, speakers=None):
     """Word runs inside [a, b]: one per transcript segment, also split at pauses longer than `pause`.
     Whisper's segment boundaries are the most reliable sentence breaks we have (large-v3 output
-    often has no punctuation at all), so cues never span two segments."""
+    often has no punctuation at all), so cues never span two segments.
+    With speakers (speakers.Speakers), every word carries "spk" and a run also ends where it changes."""
     out = []
     for s in segs:
         if s["end"] < a or s["start"] > b:
@@ -137,11 +142,13 @@ def phrases_in(segs, a, b, pause):
             d = (s["end"] - s["start"]) / max(1, len(chars))
             ws = [{"start": s["start"] + i * d, "end": s["start"] + (i + 1) * d, "word": ch}
                   for i, ch in enumerate(chars)]
+        if speakers is not None:
+            ws = [dict(w, spk=lab) for w, lab in zip(ws, speakers.label_words(ws))]
         run = []
         for w in ws:
             if not a <= (w["start"] + w["end"]) / 2 <= b:
                 continue
-            if run and w["start"] - run[-1]["end"] > pause:
+            if run and (w["start"] - run[-1]["end"] > pause or w.get("spk") != run[-1].get("spk")):
                 out.append(run)
                 run = []
             run.append(w)
@@ -212,17 +219,20 @@ def split_phrase(words, max_chars):
     return [words[:best]] + split_phrase(words[best:], max_chars)
 
 
-def build_cues(tsegs, csegs, max_chars, pause):
+def build_cues(tsegs, csegs, max_chars, pause, speakers=None):
+    """-> [[start, end, text], ...] in clip time. With speakers each cue is
+    [start, end, text, speaker, spoken_seconds] and never holds two people's words."""
     cues, offset = [], 0.0
     for cs in csegs:
         a, b = cs["a"], cs["b"]
         lines = []
-        for ph in phrases_in(tsegs, a, b, pause):
+        for ph in phrases_in(tsegs, a, b, pause, speakers):
             lines += split_phrase(ph, max_chars)
         merged = []
         for ln in lines:
             # glue very short neighbouring phrases ("再來" "再來") so one-word cues don't flash by
             if merged and ln and merged[-1] and ln[0]["start"] - merged[-1][-1]["end"] <= 0.3 and \
+                    ln[0].get("spk") == merged[-1][0].get("spk") and \
                     (len(text_of(merged[-1])) < 4 or len(text_of(ln)) < 3) and \
                     len(text_of(merged[-1])) + 1 + len(text_of(ln)) <= max_chars:
                 merged[-1] = merged[-1] + [{"word": " ", "start": ln[0]["start"], "end": ln[0]["start"]}] + ln
@@ -235,12 +245,13 @@ def build_cues(tsegs, csegs, max_chars, pause):
                 st = max(0.0, ln[0]["start"] - a + offset)
                 en = min(max(st + 0.5, ln[-1]["end"] - a + offset), limit)
                 if en - st > 0.05:
-                    cues.append([st, en, txt])
+                    cues.append([st, en, txt] if speakers is None else
+                                [st, en, txt, ln[0]["spk"], ln[-1]["end"] - ln[0]["start"]])
         offset += b - a
     for i in range(len(cues) - 1):
         if cues[i][1] > cues[i + 1][0]:
             cues[i][1] = cues[i + 1][0]
-    return cues
+    return cues if speakers is None else spk.mark_interjections(cues)
 
 
 def srt_time(t):
@@ -251,9 +262,31 @@ def srt_time(t):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def write_speaker_srts(cues, base, old=None):
+    """One SRT per speaker (only their lines, renumbered; the rest of the track stays empty), and
+    <stem>_未確定.srt for overlapping or unattributed lines. Files of an earlier run that this run
+    does not write again (a renamed speaker) are removed. -> {name: path}."""
+    groups = {}
+    for c in cues:
+        name = c[3] if spk.is_person(c[3]) else spk.UNSURE_NAME
+        groups.setdefault(name, []).append(c)
+    out = {}
+    for name, cs in groups.items():
+        path = base.with_name(f"{base.name}_{safe_name(name) or spk.UNSURE_NAME}.srt")
+        if path in out.values():  # two names that clean to the same file name
+            path = path.with_name(f"{path.stem}_{len(out)}.srt")
+        write_srt(cs, path)
+        out[name] = path
+    for p in (old or {}).values():
+        p = Path(p)
+        if p not in out.values() and p.parent == base.parent and p.name.startswith(base.name + "_") and p.suffix == ".srt":
+            p.unlink(missing_ok=True)
+    return {k: str(v) for k, v in out.items()}
+
+
 def write_srt(cues, path):
     with atomic_write(path, encoding="utf-8-sig") as f:  # BOM helps Premiere on Windows
-        for i, (st, en, txt) in enumerate(cues, 1):
+        for i, (st, en, txt, *_) in enumerate(cues, 1):
             f.write(f"{i}\n{srt_time(st)} --> {srt_time(en)}\n{txt}\n\n")
 
 
@@ -364,6 +397,7 @@ def main():
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--srt-only", action="store_true", help="只重產字幕（例如重轉之後），不重新輸出影片")
+    ap.add_argument("--no-speakers", action="store_true", help="有 speakers.json 也不依說話者斷句、分軌")
     args = ap.parse_args()
     need_tool("ffmpeg")
     cfg = load_config(args.config)
@@ -376,6 +410,13 @@ def main():
         print("字幕使用 transcript_refined.json（高品質重轉）")
     paths["clips"].mkdir(exist_ok=True)
     sub = cfg["subtitles"]
+    speakers, why = (None, None) if args.no_speakers else spk.load(paths, cfg, src)
+    if why:
+        print(f"[提醒] {why}")
+    elif speakers:
+        print("有 speakers.json：換人就斷句，另外輸出每位說話者一個 SRT（草稿，請對照畫面確認）")
+    mpath = paths["clips"] / "manifest.json"
+    prev = {e["id"]: e for e in load_json(mpath)["clips"]} if mpath.exists() else {}
 
     manifest, failed = [], []
     def make(clip):
@@ -409,11 +450,18 @@ def main():
                      "length_sec": round(length, 2), "file": str(res),
                      "segments": [[s["a"], s["b"]] for s in clip["_segs"]], "notes": notes}
             mx = sub["vertical_max_chars"] if clip["format"] == "vertical" else sub["horizontal_max_chars"]
-            cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"])
+            cues = build_cues(tsegs, clip["_segs"], mx, sub["pause_split_sec"], speakers)
+            old_split = prev.get(clip["id"], {}).get("speaker_srts")
             if cues:
                 write_srt(cues, base.with_suffix(".srt"))
                 entry["srt"] = str(base.with_suffix(".srt"))
                 entry["subtitle_lines"] = len(cues)
+            if speakers is not None:
+                entry["speaker_srts"] = write_speaker_srts(cues, base, old_split)
+                print("   分軌：" + "、".join(f"{k} {sum(1 for c in cues if (c[3] if spk.is_person(c[3]) else spk.UNSURE_NAME) == k)} 句"
+                                        for k in entry["speaker_srts"]))
+            elif old_split:
+                write_speaker_srts([], base, old_split)  # split turned off: don't leave stale tracks
             print(f"   → {res}")
             return entry
 
@@ -432,7 +480,6 @@ def main():
             manifest.append(entry)
     if not args.preview:
         # with --only, keep the other clips' entries so export_premiere_xml.py still sees every clip
-        mpath = paths["clips"] / "manifest.json"
         done = {e["id"] for e in manifest}
         old = load_json(mpath)["clips"] if (args.only and mpath.exists()) else []
         order = [c["id"] for c in sel["clips"]]
