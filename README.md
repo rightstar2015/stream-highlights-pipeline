@@ -125,6 +125,10 @@ macOS／Linux 用 `ln -s "<這個資料夾的完整路徑>" ~/.claude/skills/str
 
 重新開啟 Claude Code，說「幫我剪這場直播的精華」並提供直播檔路徑。完整流程見 [SKILL.md](SKILL.md)。
 
+### 當作 OrangeLink 擴充套件
+
+在 [OrangeLink](https://github.com/rightstar2015/OrangeLink) 的設定 →「擴充套件」加入這個資料夾（`orangelink-extension.json` 在這裡），確認並信任後，對 10 分鐘以上的影片按右鍵 →「影音」→「🧩 直播精華管線：分析整場並找精華候選」。它在背景跑 `pipeline.py`（工作資料夾和直接執行時一樣，已分析過的步驟會沿用），結果變成 OrangeLink 剪輯工作台的精華候選：開「讓 Claude 挑選」時是 Claude 的推薦（片名、直式框位置、剪輯指示都帶過去），否則是訊號高峰前 20 秒、後 10 秒。設定頁的「檢查環境」會跑 `setup_check.py`，「開啟 Clip Review」會開這裡的審核介面。轉接程式是 `orangelink_adapter.py`。
+
 ## 匯入 Premiere Pro
 
 - **XML**：工作資料夾裡的 `<直播檔名>_premiere.xml`，用「檔案 > 匯入」。每支片會變成一個序列；橫式序列直接引用原始直播檔，剪點可以延伸；直式序列放已套版型的 MP4。剪輯指示會變成序列標記，00:00 的標記會寫出要匯入的 SRT 檔名。加 `--vertical editable` 可讓直式序列改用原始直播檔加裁切與版型，剪點可以延伸。實驗功能（尚未在 Premiere 驗證）：config 的 `premiere.cards` 依 notes 文字放入片尾卡和轉場字卡。

@@ -45,6 +45,7 @@ tools/privacy_check.py          用不進 git 的 references/private_terms.txt �
 app/server.py                   Clip Review：本機網頁介面（只用標準函式庫，綁 127.0.0.1）
 app/static/index.html           單頁前端（分析／審核／出片／版型校正）
 start_clip_review.bat／.sh      啟動 Clip Review
+orangelink_adapter.py          OrangeLink 擴充套件：request.json → pipeline.py → result.json（候選）；清單是 orangelink-extension.json，協定見 OrangeLink 的 docs/EXTENSIONS.md
 run_overnight.bat／.sh          排程整晚跑分析＋Claude 挑選的範例
 .github/workflows/smoke.yml     在 Windows、Linux、macOS 跑 smoke test，並用 ruff 檢查（規則在 ruff.toml）
 tests/smoke_test.py             合成素材端對端測試（只需 ffmpeg＋numpy，約 2–3 分鐘；不測 whisper／demucs 本身）
