@@ -12,7 +12,7 @@
       "run": ["python", "orangelink_adapter.py", "find", "{request}", "{result}"],
       "returns": "clips",
       "options": [
-        { "id": "auto_select", "label": "讓 Claude 挑選（用你自己的 Claude 額度，約多 3–9 分鐘）", "type": "bool", "default": false },
+        { "id": "auto-select", "label": "讓 Claude 挑選（用你自己的 Claude 額度，約多 3–9 分鐘）", "type": "bool", "default": false },
         { "id": "separate", "label": "人聲分離（需要 Demucs，較慢但遊戲直播較準）", "type": "bool", "default": true }
       ]
     }

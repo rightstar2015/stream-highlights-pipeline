@@ -8,6 +8,7 @@ Needs only ffmpeg + numpy (no whisper, no network). Checks:
   Premiere XML structure + markers, reference analysis.
 """
 import json
+import re
 import shutil
 import time
 import subprocess
@@ -174,6 +175,13 @@ def main():
     check(r.returncode == 2 and "可能過期" in r.stdout, "pipeline：分析範圍改變時提醒，不沿用舊結果")
 
     # OrangeLink extension: request.json in, result.json out, progress as @@ lines
+    # OrangeLink accepts ids of a-z, 0-9 and "-" (40 chars max); the adapter must read the option ids the manifest declares
+    manifest = json.loads((HERE.parent / "orangelink-extension.json").read_text(encoding="utf-8"))
+    ids = [manifest["id"]] + [a["id"] for a in manifest["actions"]] + [o["id"] for a in manifest["actions"] for o in a["options"]]
+    check(all(re.fullmatch(r"[a-z0-9-]{1,40}", i) for i in ids), f"OrangeLink 擴充：清單的 id 符合 OrangeLink 的規則（{ids}）")
+    adapter_src = (HERE.parent / "orangelink_adapter.py").read_text(encoding="utf-8")
+    check(all(f'opts.get("{o["id"]}"' in adapter_src for a in manifest["actions"] for o in a["options"]),
+          "OrangeLink 擴充：清單的每個選項 adapter 都有讀")
     req = {"protocol": 1, "action": "find", "options": {"separate": False},
            "item": {"id": "i1", "name": "stream", "kind": "video", "path": str(video), "original": None,
                     "duration": 300.0, "width": 1920, "height": 1080,

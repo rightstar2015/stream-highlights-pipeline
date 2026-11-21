@@ -115,7 +115,7 @@ def find(request_path, result_path):
         cmd += ["--chat-file", item["chat_file"]]
     if not opts.get("separate", True):
         cmd.append("--no-separate")
-    auto = bool(opts.get("auto_select"))
+    auto = bool(opts.get("auto-select"))
     if auto:
         cmd.append("--auto-select")
     total = 6 + auto
