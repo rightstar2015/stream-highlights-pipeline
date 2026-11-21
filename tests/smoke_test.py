@@ -173,6 +173,39 @@ def main():
                        cwd=SCRIPTS, capture_output=True, text=True, encoding="utf-8", errors="replace")
     check(r.returncode == 2 and "可能過期" in r.stdout, "pipeline：分析範圍改變時提醒，不沿用舊結果")
 
+    # OrangeLink extension: request.json in, result.json out, progress as @@ lines
+    req = {"protocol": 1, "action": "find", "options": {"separate": False},
+           "item": {"id": "i1", "name": "stream", "kind": "video", "path": str(video), "original": None,
+                    "duration": 300.0, "width": 1920, "height": 1080,
+                    "chat_file": str(OUT / "chat.live_chat.json"), "subtitles": None},
+           "workdir": str(W2)}
+    (OUT / "request.json").write_text(json.dumps(req), encoding="utf-8")
+    r = subprocess.run([PY, str(HERE.parent / "orangelink_adapter.py"), "find", str(OUT / "request.json"),
+                        str(OUT / "result.json")], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    progress = [json.loads(l[3:]) for l in r.stdout.splitlines() if l.startswith("@@ ")]
+    res = json.loads((OUT / "result.json").read_text(encoding="utf-8")) if r.returncode == 0 else {}
+    clips = res.get("clips", [])
+    check(r.returncode == 0 and clips and all(0 <= c["start"] < c["end"] <= 300 for c in clips)
+          and any(c["start"] <= 100 <= c["end"] for c in clips) and progress[-1] == {"progress": 1.0, "message": "完成"},
+          f"OrangeLink 擴充：沿用分析、回傳影片範圍內的候選（{r.stdout[-300:]}{r.stderr[-300:]}）")
+    req["item"]["duration"] = 1.0
+    (OUT / "request.json").write_text(json.dumps(req), encoding="utf-8")
+    r = subprocess.run([PY, str(HERE.parent / "orangelink_adapter.py"), "find", str(OUT / "request.json"),
+                        str(OUT / "result.json")], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    res = json.loads((OUT / "result.json").read_text(encoding="utf-8"))
+    check(r.returncode == 0 and all(c["end"] <= 1.0 for c in res["clips"]), "OrangeLink 擴充：片段不超過 OrangeLink 給的長度")
+    sys.path.insert(0, str(HERE.parent))
+    from orangelink_adapter import from_draft
+    lay = {"crop_presets": {"game": [420, 0, 1000, 1080], "pip": {"region": [300, 0, 1000, 1080]}}, "default_crop": "game"}
+    picks = from_draft({"clips": [
+        {"id": "v01", "format": "vertical", "title": "開場", "segments": [{"in": "1:00", "out": "1:10", "crop": "pip"},
+                                                                         ["1:20", "1:30"]], "notes": [{"at": "1:05", "text": "放大"}]},
+        {"id": "h01", "format": "horizontal", "segments": [[250, 400]]}]}, lay, 1920, 300)
+    check(picks[0]["start"] == 60 and picks[0]["end"] == 90 and picks[0]["name"] == "開場"
+          and picks[0]["crop_x"] == round(800 / 1920, 3) and "跳剪" in picks[0]["note"] and "放大" in picks[0]["note"]
+          and picks[1]["end"] == 300 and "crop_x" not in picks[1] and "name" not in picks[1],
+          f"OrangeLink 擴充：Claude 的推薦轉成整段範圍、直式框中心與註解（{picks}）")
+
     W3 = OUT / "range"
     W3.mkdir()
     shutil.copy(W / "transcript.json", W3 / "transcript.json")

@@ -1,0 +1,21 @@
+{
+  "protocol": 1,
+  "id": "stream-highlights",
+  "name": "直播精華管線",
+  "version": "1",
+  "check": ["python", "orangelink_adapter.py", "check"],
+  "actions": [
+    {
+      "id": "find",
+      "label": "分析整場並找精華候選",
+      "applies_to": { "kinds": ["video"], "min_duration_sec": 600 },
+      "run": ["python", "orangelink_adapter.py", "find", "{request}", "{result}"],
+      "returns": "clips",
+      "options": [
+        { "id": "auto_select", "label": "讓 Claude 挑選（用你自己的 Claude 額度，約多 3–9 分鐘）", "type": "bool", "default": false },
+        { "id": "separate", "label": "人聲分離（需要 Demucs，較慢但遊戲直播較準）", "type": "bool", "default": true }
+      ]
+    }
+  ],
+  "ui": { "label": "開啟 Clip Review", "run": ["python", "app/server.py"] }
+}
